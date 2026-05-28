@@ -9,6 +9,7 @@ using Fias.Service.Updater.Services.Importing;
 using Fias.Service.Updater.Services.Schema;
 using Fias.Service.Updater.Services.State;
 using Hangfire;
+using Hangfire.Console;
 using Hangfire.PostgreSql;
 
 var builder = Host.CreateApplicationBuilder(args);
@@ -24,6 +25,7 @@ builder.Services.AddHangfire(cfg =>
     {
         opt.UseNpgsqlConnection(builder.Configuration.GetConnectionString("Default"));
     });
+    cfg.UseConsole();
 });
 
 builder.Services.AddHangfireServer(opt =>

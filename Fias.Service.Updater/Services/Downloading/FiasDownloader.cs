@@ -1,4 +1,5 @@
 using Fias.Service.Updater.Options;
+using Fias.Service.Updater.Services.Progress;
 using Microsoft.Extensions.Options;
 
 namespace Fias.Service.Updater.Services.Downloading;
@@ -6,10 +7,10 @@ namespace Fias.Service.Updater.Services.Downloading;
 public interface IFiasDownloader
 {
     /// <summary>Возвращает путь к локальному ZIP с дельтой (скачивает если нужно).</summary>
-    Task<string> EnsureDeltaAsync(DownloadFileInfo info, CancellationToken ct);
+    Task<string> EnsureDeltaAsync(DownloadFileInfo info, IProgressSink progress, CancellationToken ct);
 
     /// <summary>Возвращает путь к локальному ZIP с полной выгрузкой (скачивает если нужно).</summary>
-    Task<string> EnsureFullAsync(DownloadFileInfo info, CancellationToken ct);
+    Task<string> EnsureFullAsync(DownloadFileInfo info, IProgressSink progress, CancellationToken ct);
 }
 
 public class FiasDownloader(
@@ -19,34 +20,38 @@ public class FiasDownloader(
 {
     private readonly FiasOptions _options = options.Value;
 
-    public Task<string> EnsureDeltaAsync(DownloadFileInfo info, CancellationToken ct)
+    public Task<string> EnsureDeltaAsync(DownloadFileInfo info, IProgressSink progress, CancellationToken ct)
     {
         var url = info.GarXmlDeltaUrl
                   ?? $"{_options.ActualDownloadsBaseUrl.TrimEnd('/')}/{_options.DeltaArchiveFileName}";
         var target = Path.Combine(_options.ImportDirectory, $"gar_delta_xml_{info.VersionId}.zip");
-        return DownloadIfMissingAsync(url, target, ct);
+        return DownloadIfMissingAsync(url, target, progress, ct);
     }
 
-    public Task<string> EnsureFullAsync(DownloadFileInfo info, CancellationToken ct)
+    public Task<string> EnsureFullAsync(DownloadFileInfo info, IProgressSink progress, CancellationToken ct)
     {
         var url = info.GarXmlFullUrl
                   ?? $"{_options.ActualDownloadsBaseUrl.TrimEnd('/')}/{_options.FullArchiveFileName}";
         var target = Path.Combine(_options.ImportDirectory, $"gar_xml_{info.VersionId}.zip");
-        return DownloadIfMissingAsync(url, target, ct);
+        return DownloadIfMissingAsync(url, target, progress, ct);
     }
 
-    private async Task<string> DownloadIfMissingAsync(string url, string targetPath, CancellationToken ct)
+    private async Task<string> DownloadIfMissingAsync(string url, string targetPath, IProgressSink progress, CancellationToken ct)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
 
         if (File.Exists(targetPath))
         {
-            logger.LogInformation("Файл уже скачан: {Path}", targetPath);
+            var msg = $"Файл уже скачан: {targetPath}";
+            logger.LogInformation(msg);
+            progress.WriteLine(msg);
             return targetPath;
         }
 
         var tempPath = targetPath + ".part";
-        logger.LogInformation("Скачивание {Url} → {Path}", url, targetPath);
+        var startMsg = $"Скачивание {url} → {targetPath}";
+        logger.LogInformation(startMsg);
+        progress.WriteLine(startMsg);
 
         using var response = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct);
         response.EnsureSuccessStatusCode();
@@ -55,20 +60,23 @@ public class FiasDownloader(
         await using (var src = await response.Content.ReadAsStreamAsync(ct))
         await using (var dst = File.Create(tempPath))
         {
-            await CopyWithProgressAsync(src, dst, total, targetPath, ct);
+            await CopyWithProgressAsync(src, dst, total, targetPath, progress, ct);
         }
 
         File.Move(tempPath, targetPath, overwrite: true);
-        logger.LogInformation("Скачано: {Path} ({Length:N0} байт)", targetPath, new FileInfo(targetPath).Length);
+        var doneMsg = $"Скачано: {targetPath} ({new FileInfo(targetPath).Length:N0} байт)";
+        logger.LogInformation(doneMsg);
+        progress.WriteLine(doneMsg);
         return targetPath;
     }
 
     /// <summary>
-    /// Копирует поток буферами по 80 КБ, периодически логируя прогресс — раз в 3 секунды
-    /// или каждые 50 МБ (что наступит раньше). Если Content-Length известен, в логе доля %.
+    /// Копирует поток буферами по 80 КБ. Прогресс пишется в IProgressSink (Hangfire.Console
+    /// или ILogger). Раз в 3 секунды или каждые 50 МБ — текстовая строка, на каждом батче —
+    /// обновление progress-bar (если Content-Length известен).
     /// </summary>
-    private async Task CopyWithProgressAsync(
-        Stream src, Stream dst, long? total, string targetPath, CancellationToken ct)
+    private static async Task CopyWithProgressAsync(
+        Stream src, Stream dst, long? total, string targetPath, IProgressSink progress, CancellationToken ct)
     {
         const int bufferSize = 81_920;
         const long logEveryBytes = 50L * 1024 * 1024;
@@ -81,41 +89,46 @@ public class FiasDownloader(
         var lastLoggedAt = started;
         var fileName = Path.GetFileName(targetPath);
 
+        var bar = total is { } sizeForBar && sizeForBar > 0
+            ? progress.StartProgressBar($"Скачивание {fileName}")
+            : null;
+
         int read;
         while ((read = await src.ReadAsync(buffer.AsMemory(0, bufferSize), ct)) > 0)
         {
             await dst.WriteAsync(buffer.AsMemory(0, read), ct);
             copied += read;
 
+            if (bar is not null && total is { } t)
+                bar.SetValue(copied * 100d / t);
+
             var now = DateTime.UtcNow;
-            var deltaBytes = copied - lastLoggedBytes;
-            if (deltaBytes >= logEveryBytes || now - lastLoggedAt >= logEveryInterval)
+            if (copied - lastLoggedBytes >= logEveryBytes || now - lastLoggedAt >= logEveryInterval)
             {
                 var elapsed = now - started;
                 var speedMBs = elapsed.TotalSeconds > 0
                     ? copied / (1024d * 1024d) / elapsed.TotalSeconds
                     : 0;
 
-                if (total is { } t && t > 0)
+                string line;
+                if (total is { } known && known > 0)
                 {
-                    var percent = copied * 100d / t;
-                    var etaSeconds = speedMBs > 0
-                        ? (t - copied) / (speedMBs * 1024 * 1024)
-                        : 0;
-                    logger.LogInformation(
-                        "{File}: {Copied:N0} / {Total:N0} байт ({Percent:F1}%), {Speed:F1} MB/s, ETA {Eta:F0}s",
-                        fileName, copied, t, percent, speedMBs, etaSeconds);
+                    var percent = copied * 100d / known;
+                    var eta = speedMBs > 0 ? (known - copied) / (speedMBs * 1024 * 1024) : 0;
+                    line = $"{fileName}: {copied:N0} / {known:N0} байт ({percent:F1}%), {speedMBs:F1} MB/s, ETA {eta:F0}s";
                 }
                 else
                 {
-                    logger.LogInformation(
-                        "{File}: {Copied:N0} байт, {Speed:F1} MB/s",
-                        fileName, copied, speedMBs);
+                    line = $"{fileName}: {copied:N0} байт, {speedMBs:F1} MB/s";
                 }
+                progress.WriteLine(line);
 
                 lastLoggedBytes = copied;
                 lastLoggedAt = now;
             }
         }
+
+        if (bar is not null && total is { })
+            bar.SetValue(100);
     }
 }

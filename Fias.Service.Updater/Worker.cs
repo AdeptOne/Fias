@@ -27,16 +27,18 @@ public class Worker(
 
         // Полная загрузка запускается вручную из Hangfire Dashboard (Trigger now).
         // При пустом localZipPath оркестратор сам решит: локальный файл из ImportDirectory или скачать с ФНС.
+        // Регистрируем перегрузки с PerformContext (null заменяется Hangfire'ом на актуальный
+        // контекст) — это даёт прогресс в Console-вкладке Dashboard при «Trigger now».
         jobs.AddOrUpdate<FiasUpdateJob>(
             "full-data-import",
             "fias",
-            j => j.RunFullAsync(null, CancellationToken.None),
+            j => j.RunFullAsync(null, null!, CancellationToken.None),
             Cron.Never());
 
         jobs.AddOrUpdate<FiasUpdateJob>(
             "delta-data-import",
             "fias",
-            j => j.RunDeltaAsync(CancellationToken.None),
+            j => j.RunDeltaAsync(null!, CancellationToken.None),
             Cron.Daily(3));
     }
 }
