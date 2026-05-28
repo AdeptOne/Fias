@@ -74,19 +74,35 @@ public class AddressBuilderService(IFiasDbContext db) : IAddressBuilderService
         var roomDict = roomList.GroupBy(r => r.ObjectId).ToDictionary(g => g.Key, g => g.First());
 
         // 3. Параметры «Официальное наименование» (TYPEID=16) — для Level 1, 3, 4.
+        //    Грузим плоско и группируем на клиенте: EF Core 8 не транслирует
+        //    GroupBy → OrderByDescending().First() в одном запросе.
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
-        var officialNames = await db.Params.AsNoTracking()
+        var officialRows = await db.Params.AsNoTracking()
             .Where(p => ids.Contains(p.ObjectId)
                         && p.TypeId == OfficialNameTypeId
                         && (p.EndDate == null || p.EndDate > today))
-            .GroupBy(p => p.ObjectId)
-            .Select(g => new { ObjectId = g.Key, Value = g.OrderByDescending(p => p.StartDate).First().Value })
-            .ToDictionaryAsync(x => x.ObjectId, x => x.Value, ct);
+            .OrderBy(p => p.ObjectId).ThenByDescending(p => p.StartDate)
+            .Select(p => new { p.ObjectId, p.Value })
+            .ToListAsync(ct);
+        var officialNames = officialRows
+            .GroupBy(x => x.ObjectId)
+            .ToDictionary(g => g.Key, g => g.First().Value);
 
         // 4. Справочники типов — небольшие, грузим целиком в память (активные записи).
-        var addressTypes = await db.AddressObjectTypes.AsNoTracking()
+        //    AddressObjectType индексируем по (Level, ShortName) для O(1) lookup;
+        //    ShortName тримим — в данных ФИАС встречаются пробелы.
+        var addressTypeList = await db.AddressObjectTypes.AsNoTracking()
             .Where(t => t.IsActive == 1)
             .ToListAsync(ct);
+        var addressTypeByLevelShort = addressTypeList
+            .Where(t => t.Level is not null && !string.IsNullOrWhiteSpace(t.ShortName))
+            .GroupBy(t => (t.Level!.Value, t.ShortName!.Trim()), AddressTypeKeyComparer.Instance)
+            .ToDictionary(g => g.Key, g => g.First(), AddressTypeKeyComparer.Instance);
+        var addressTypeByLevel = addressTypeList
+            .Where(t => t.Level is not null)
+            .GroupBy(t => t.Level!.Value)
+            .ToDictionary(g => g.Key, g => g.First());
+
         var houseTypes = await db.HouseTypes.AsNoTracking().Where(t => t.IsActive == 1).ToDictionaryAsync(t => t.Id, ct);
         var apartmentTypes = await db.ApartmentTypes.AsNoTracking().Where(t => t.IsActive == 1).ToDictionaryAsync(t => t.Id, ct);
         var roomTypes = await db.RoomTypes.AsNoTracking().Where(t => t.IsActive == 1).ToDictionaryAsync(t => t.Id, ct);
@@ -101,7 +117,7 @@ public class AddressBuilderService(IFiasDbContext db) : IAddressBuilderService
             var level = lvl.LevelId.Value;
             var (typeFull, typeShort, name) = ResolveNameAndType(
                 id, level, addressDict, houseDict, apartmentDict, roomDict,
-                addressTypes, houseTypes, apartmentTypes, roomTypes);
+                addressTypeByLevelShort, addressTypeByLevel, houseTypes, apartmentTypes, roomTypes);
 
             // Официальное наименование перекрывает type + name, если оно активно.
             string fullName;
@@ -136,7 +152,8 @@ public class AddressBuilderService(IFiasDbContext db) : IAddressBuilderService
         Dictionary<long, House> houses,
         Dictionary<long, Apartment> apartments,
         Dictionary<long, Room> rooms,
-        List<AddressObjectType> addressTypes,
+        Dictionary<(int Level, string ShortName), AddressObjectType> addressTypeByLevelShort,
+        Dictionary<int, AddressObjectType> addressTypeByLevel,
         Dictionary<int, HouseType> houseTypes,
         Dictionary<int, ApartmentType> apartmentTypes,
         Dictionary<int, RoomType> roomTypes)
@@ -145,35 +162,43 @@ public class AddressBuilderService(IFiasDbContext db) : IAddressBuilderService
         {
             case LevelHouse when houses.TryGetValue(objectId, out var house):
             {
-                var typeShort = house.HouseType is { } ht && houseTypes.TryGetValue(ht, out var t1) ? t1.ShortName : null;
-                var typeFull = house.HouseType is { } ht2 && houseTypes.TryGetValue(ht2, out var t2) ? t2.Name : null;
-                var name = BuildHouseName(house);
-                return (typeFull, typeShort, name);
+                var (typeFull, typeShort) = house.HouseType is { } ht && houseTypes.TryGetValue(ht, out var t)
+                    ? (t.Name?.Trim(), t.ShortName?.Trim())
+                    : (null, null);
+                return (typeFull, typeShort, BuildHouseName(house));
             }
             case LevelApartment when apartments.TryGetValue(objectId, out var apt):
             {
-                var typeShort = apt.ApartType is { } at && apartmentTypes.TryGetValue(at, out var t1) ? t1.ShortName : null;
-                var typeFull = apt.ApartType is { } at2 && apartmentTypes.TryGetValue(at2, out var t2) ? t2.Name : null;
-                return (typeFull, typeShort, apt.Number);
+                var (typeFull, typeShort) = apt.ApartType is { } at && apartmentTypes.TryGetValue(at, out var t)
+                    ? (t.Name?.Trim(), t.ShortName?.Trim())
+                    : (null, null);
+                return (typeFull, typeShort, apt.Number?.Trim());
             }
             case LevelRoom when rooms.TryGetValue(objectId, out var room):
             {
-                var typeShort = room.RoomType is { } rt && roomTypes.TryGetValue(rt, out var t1) ? t1.ShortName : null;
-                var typeFull = room.RoomType is { } rt2 && roomTypes.TryGetValue(rt2, out var t2) ? t2.Name : null;
-                return (typeFull, typeShort, room.Number);
+                var (typeFull, typeShort) = room.RoomType is { } rt && roomTypes.TryGetValue(rt, out var t)
+                    ? (t.Name?.Trim(), t.ShortName?.Trim())
+                    : (null, null);
+                return (typeFull, typeShort, room.Number?.Trim());
             }
             case LevelLand:
             case LevelCarplace:
             {
-                var t = addressTypes.FirstOrDefault(x => x.Level == level);
-                return (t?.Name, t?.ShortName, null);
+                addressTypeByLevel.TryGetValue(level, out var t);
+                return (t?.Name?.Trim(), t?.ShortName?.Trim(), null);
             }
             default:
             {
+                // В ФИАС встречаются NAME/TYPENAME с лидирующими пробелами — нормализуем.
                 if (!addrs.TryGetValue(objectId, out var addr)) return (null, null, null);
-                var t = addressTypes.FirstOrDefault(x => x.Level == level
-                                                         && string.Equals(x.ShortName, addr.TypeName, StringComparison.OrdinalIgnoreCase));
-                return (t?.Name, t?.ShortName ?? addr.TypeName, addr.Name);
+                var typeName = addr.TypeName?.Trim();
+                var name = addr.Name?.Trim();
+                if (!string.IsNullOrEmpty(typeName)
+                    && addressTypeByLevelShort.TryGetValue((level, typeName), out var t))
+                {
+                    return (t.Name?.Trim(), t.ShortName?.Trim() ?? typeName, name);
+                }
+                return (null, typeName, name);
             }
         }
     }
@@ -182,12 +207,28 @@ public class AddressBuilderService(IFiasDbContext db) : IAddressBuilderService
     {
         // HOUSETYPE HOUSENUM [ADDTYPE1 ADDNUM1] [ADDTYPE2 ADDNUM2]
         // Доп. типы (ADDTYPE1/2) — это идентификаторы из ADDHOUSE_TYPES, который мы пока не импортируем.
-        // Поэтому используем числовой код доп. типа как fallback.
+        // Поэтому используем числовой код доп. типа как fallback (если есть).
         var parts = new List<string>();
         if (!string.IsNullOrEmpty(h.HouseNum)) parts.Add(h.HouseNum);
-        if (!string.IsNullOrEmpty(h.AddNum1)) parts.Add(h.AddType1?.ToString(CultureInfo.InvariantCulture) + " " + h.AddNum1);
-        if (!string.IsNullOrEmpty(h.AddNum2)) parts.Add(h.AddType2?.ToString(CultureInfo.InvariantCulture) + " " + h.AddNum2);
+        if (!string.IsNullOrEmpty(h.AddNum1)) parts.Add(JoinAdd(h.AddType1, h.AddNum1));
+        if (!string.IsNullOrEmpty(h.AddNum2)) parts.Add(JoinAdd(h.AddType2, h.AddNum2));
         return string.Join(" ", parts);
+    }
+
+    private static string JoinAdd(int? type, string num)
+    {
+        return type is null
+            ? num
+            : $"{type.Value.ToString(CultureInfo.InvariantCulture)} {num}";
+    }
+
+    private sealed class AddressTypeKeyComparer : IEqualityComparer<(int Level, string ShortName)>
+    {
+        public static readonly AddressTypeKeyComparer Instance = new();
+        public bool Equals((int Level, string ShortName) x, (int Level, string ShortName) y)
+            => x.Level == y.Level && string.Equals(x.ShortName, y.ShortName, StringComparison.OrdinalIgnoreCase);
+        public int GetHashCode((int Level, string ShortName) obj)
+            => HashCode.Combine(obj.Level, obj.ShortName.ToLowerInvariant());
     }
 
     private static List<long> ParsePath(string path)

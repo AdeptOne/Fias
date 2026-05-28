@@ -44,7 +44,8 @@ public class Migrator(INpgsqlConnectionFactory factory, ILogger<Migrator> logger
         logger.LogWarning("Полная очистка таблиц fias.* перед перезаливкой");
 
         await using var conn = await factory.OpenAsync(ct);
-        var sql = "TRUNCATE TABLE " + string.Join(", ", DataTables) + " RESTART IDENTITY";
+        // RESTART IDENTITY не нужен — все PK в схеме явные bigint/integer без serial.
+        var sql = "TRUNCATE TABLE " + string.Join(", ", DataTables);
         await using var cmd = new NpgsqlCommand(sql, conn);
         await cmd.ExecuteNonQueryAsync(ct);
     }

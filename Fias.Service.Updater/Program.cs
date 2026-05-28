@@ -33,10 +33,12 @@ builder.Services.AddHangfireServer(opt =>
 });
 
 builder.Services.AddSingleton<INpgsqlConnectionFactory, NpgsqlConnectionFactory>();
-builder.Services.AddSingleton<IMigrator, Migrator>();
-builder.Services.AddSingleton<IFiasVersionStore, FiasVersionStore>();
 builder.Services.AddSingleton<IFiasArchiveReader, FiasArchiveReader>();
-builder.Services.AddSingleton<IFiasImportOrchestrator, FiasImportOrchestrator>();
+// Orchestrator зависит от typed-HttpClient'ов (Transient) — он сам должен быть Scoped,
+// иначе DI поймает captive dependency при validateScopes=true.
+builder.Services.AddScoped<IMigrator, Migrator>();
+builder.Services.AddScoped<IFiasVersionStore, FiasVersionStore>();
+builder.Services.AddScoped<IFiasImportOrchestrator, FiasImportOrchestrator>();
 builder.Services.AddScoped<FiasUpdateJob>();
 
 // Импортёры базового набора (см. «Правила формирования адресной строки»).
