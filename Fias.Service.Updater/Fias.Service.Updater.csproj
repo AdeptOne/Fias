@@ -12,6 +12,8 @@
         <PackageReference Include="Hangfire.AspNetCore" Version="1.8.23" />
         <PackageReference Include="Hangfire.PostgreSql" Version="1.21.1" />
         <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.0"/>
+        <PackageReference Include="Microsoft.Extensions.Http" Version="8.0.0" />
+        <PackageReference Include="Npgsql" Version="8.0.3" />
     </ItemGroup>
 
     <ItemGroup>
@@ -20,7 +22,4 @@
       </Content>
     </ItemGroup>
 
-    <ItemGroup>
-      <Folder Include="Services\" />
-    </ItemGroup>
 </Project>

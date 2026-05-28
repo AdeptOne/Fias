@@ -1,10 +1,12 @@
-﻿services:
+services:
   postgres:
     image: postgres:16
     environment:
       POSTGRES_DB: fias
       POSTGRES_PASSWORD: secret
-  
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
   fias.api:
     image: fias.api
     build:
@@ -12,7 +14,9 @@
       dockerfile: Fias.Api/Dockerfile
     depends_on: [postgres]
     environment:
-      ConnectionStrings__Default: "Host=postgres;Database=fias;Password=secret"
+      ConnectionStrings__Default: "Host=postgres;Database=fias;Username=postgres;Password=secret"
+    ports:
+      - "8080:8080"
 
   fias.service.updater:
     image: fias.service.updater
@@ -21,5 +25,11 @@
       dockerfile: Fias.Service.Updater/Dockerfile
     depends_on: [postgres]
     environment:
-      ConnectionStrings__Default: "Host=postgres;Database=fias;Password=secret"
+      ConnectionStrings__Default: "Host=postgres;Database=fias;Username=postgres;Password=secret"
+      Fias__ImportDirectory: "/fias/import"
+    volumes:
+      # Локальная папка для подкладывания gar_xml.zip "под ноги" воркеру.
+      - ./fias-import:/fias/import
 
+volumes:
+  postgres-data:

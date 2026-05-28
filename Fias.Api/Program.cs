@@ -1,5 +1,5 @@
+using Fias.Api.Auth;
 using Hangfire;
-using Hangfire.Dashboard;
 using Hangfire.PostgreSql;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -17,18 +17,22 @@ builder.Services.AddHangfire(cfg =>
     });
 });
 
+// Намеренно не вызываем AddHangfireServer — обработка job'ов живёт в Fias.Service.Updater.
+// Здесь Hangfire нужен только для Dashboard поверх общего PostgreSQL-стораджа.
+
+builder.Services.AddSingleton<HangfireDashboardAuthorizationFilter>();
+
 var app = builder.Build();
 
 app.UseHttpsRedirection();
-
 app.UseAuthorization();
-
 app.MapControllers();
 
 app.UseHangfireDashboard("/hangfire", new DashboardOptions
 {
-    Authorization = [new AuthorizationFilter()],
-    AppPath = "/"
+    Authorization = [app.Services.GetRequiredService<HangfireDashboardAuthorizationFilter>()],
+    AppPath = "/",
+    DashboardTitle = "ФИАС — задачи обновления"
 });
 
 app.Run();
