@@ -13,6 +13,7 @@ var builder = WebApplication.CreateBuilder(args);
 
 // --- API-key authentication + Authorization (Public/Admin роли) ---
 builder.Services.Configure<ApiKeyOptions>(builder.Configuration.GetSection(ApiKeyOptions.SectionName));
+builder.Services.Configure<HangfireDashboardOptions>(builder.Configuration.GetSection(HangfireDashboardOptions.SectionName));
 
 builder.Services
     .AddAuthentication(ApiKeyAuthenticationSchemeOptions.Scheme)
@@ -125,16 +126,18 @@ app.UseRateLimiter();
 app.UseSwagger();
 app.UseSwaggerUI();
 
-app.UseAuthentication();
-app.UseAuthorization();
-
-app.MapControllers();
-
+// Hangfire Dashboard ставим ДО Authentication/Authorization, чтобы его собственный
+// фильтр (root-токен) был единственной проверкой, без вмешательства API-key схемы.
 app.UseHangfireDashboard("/hangfire", new DashboardOptions
 {
     Authorization = [app.Services.GetRequiredService<HangfireDashboardAuthorizationFilter>()],
     AppPath = "/",
     DashboardTitle = "ФИАС — задачи обновления"
 });
+
+app.UseAuthentication();
+app.UseAuthorization();
+
+app.MapControllers();
 
 app.Run();
