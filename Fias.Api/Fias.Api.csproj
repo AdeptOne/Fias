@@ -5,6 +5,8 @@
         <Nullable>enable</Nullable>
         <ImplicitUsings>enable</ImplicitUsings>
         <DockerDefaultTargetOS>Linux</DockerDefaultTargetOS>
+        <GenerateDocumentationFile>true</GenerateDocumentationFile>
+        <NoWarn>$(NoWarn);CS1591;CS1573</NoWarn>
     </PropertyGroup>
 
     <ItemGroup>
@@ -14,8 +16,14 @@
     </ItemGroup>
 
     <ItemGroup>
+      <ProjectReference Include="..\Fias.Application\Fias.Application.csproj" />
+      <ProjectReference Include="..\Fias.Infrastructure\Fias.Infrastructure.csproj" />
+    </ItemGroup>
+
+    <ItemGroup>
       <PackageReference Include="Hangfire.AspNetCore" Version="1.8.23" />
       <PackageReference Include="Hangfire.PostgreSql" Version="1.21.1" />
+      <PackageReference Include="Swashbuckle.AspNetCore" Version="6.7.3" />
     </ItemGroup>
 
 </Project>

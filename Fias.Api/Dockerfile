@@ -8,6 +8,9 @@ FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
 ARG BUILD_CONFIGURATION=Release
 WORKDIR /src
 COPY ["Fias.Api/Fias.Api.csproj", "Fias.Api/"]
+COPY ["Fias.Application/Fias.Application.csproj", "Fias.Application/"]
+COPY ["Fias.Domain/Fias.Domain.csproj", "Fias.Domain/"]
+COPY ["Fias.Infrastructure/Fias.Infrastructure.csproj", "Fias.Infrastructure/"]
 RUN dotnet restore "Fias.Api/Fias.Api.csproj"
 COPY . .
 WORKDIR "/src/Fias.Api"

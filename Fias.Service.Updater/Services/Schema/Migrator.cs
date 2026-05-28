@@ -54,6 +54,7 @@ public class Migrator(INpgsqlConnectionFactory factory, ILogger<Migrator> logger
     // Первичный ключ — суррогатный ID из XML, кроме иерархий, где он тоже уникален.
     private const string Ddl = """
         CREATE SCHEMA IF NOT EXISTS fias;
+        CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
         CREATE TABLE IF NOT EXISTS fias.import_state (
             id              integer PRIMARY KEY DEFAULT 1,
@@ -90,6 +91,11 @@ public class Migrator(INpgsqlConnectionFactory factory, ILogger<Migrator> logger
             isactive    smallint
         );
         CREATE INDEX IF NOT EXISTS ix_addressobjects_objectid ON fias.addressobjects(objectid);
+        CREATE INDEX IF NOT EXISTS ix_addressobjects_name_trgm
+            ON fias.addressobjects USING gin (name gin_trgm_ops)
+            WHERE isactive = 1 AND isactual = 1;
+        CREATE INDEX IF NOT EXISTS ix_addressobjects_objectguid ON fias.addressobjects(objectguid)
+            WHERE isactive = 1 AND isactual = 1;
 
         CREATE TABLE IF NOT EXISTS fias.houses (
             id          bigint PRIMARY KEY,
@@ -169,6 +175,8 @@ public class Migrator(INpgsqlConnectionFactory factory, ILogger<Migrator> logger
             isactive    smallint
         );
         CREATE INDEX IF NOT EXISTS ix_adm_hierarchy_objectid ON fias.adm_hierarchy(objectid);
+        CREATE INDEX IF NOT EXISTS ix_adm_hierarchy_parentobjid ON fias.adm_hierarchy(parentobjid)
+            WHERE isactive = 1;
 
         CREATE TABLE IF NOT EXISTS fias.addressobject_types (
             id          integer PRIMARY KEY,
