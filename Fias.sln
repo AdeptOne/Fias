@@ -1,0 +1,33 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{3D35FA3B-23FE-49CD-B5E8-41756B3C5753}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Fias.Api", "Fias.Api\Fias.Api.csproj", "{862AEA8E-5612-420A-BD5F-4A02E4989465}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{94A12A72-3326-4315-B1A5-0B117FBE71FC}"
+	ProjectSection(SolutionItems) = preProject
+		compose.yaml = compose.yaml
+	EndProjectSection
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Fias.Service.Updater", "Fias.Service.Updater\Fias.Service.Updater.csproj", "{C9155D77-7DDE-4407-AB03-B247A57F8249}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{862AEA8E-5612-420A-BD5F-4A02E4989465} = {3D35FA3B-23FE-49CD-B5E8-41756B3C5753}
+		{C9155D77-7DDE-4407-AB03-B247A57F8249} = {3D35FA3B-23FE-49CD-B5E8-41756B3C5753}
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{862AEA8E-5612-420A-BD5F-4A02E4989465}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{862AEA8E-5612-420A-BD5F-4A02E4989465}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{862AEA8E-5612-420A-BD5F-4A02E4989465}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{862AEA8E-5612-420A-BD5F-4A02E4989465}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C9155D77-7DDE-4407-AB03-B247A57F8249}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C9155D77-7DDE-4407-AB03-B247A57F8249}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C9155D77-7DDE-4407-AB03-B247A57F8249}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C9155D77-7DDE-4407-AB03-B247A57F8249}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal

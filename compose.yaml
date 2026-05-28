@@ -1,0 +1,25 @@
+﻿services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: fias
+      POSTGRES_PASSWORD: secret
+  
+  fias.api:
+    image: fias.api
+    build:
+      context: .
+      dockerfile: Fias.Api/Dockerfile
+    depends_on: [postgres]
+    environment:
+      ConnectionStrings__Default: "Host=postgres;Database=fias;Password=secret"
+
+  fias.service.updater:
+    image: fias.service.updater
+    build:
+      context: .
+      dockerfile: Fias.Service.Updater/Dockerfile
+    depends_on: [postgres]
+    environment:
+      ConnectionStrings__Default: "Host=postgres;Database=fias;Password=secret"
+
