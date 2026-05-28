@@ -1,9 +1,10 @@
+using Fias.Application.Services;
 using Fias.Service.Updater.Services;
 using Hangfire;
 
 namespace Fias.Service.Updater.Jobs;
 
-public class FiasUpdateJob(IFiasImportOrchestrator orchestrator, ILogger<FiasUpdateJob> logger)
+public class FiasUpdateJob(IFiasImportOrchestrator orchestrator, ILogger<FiasUpdateJob> logger) : IFiasUpdateJob
 {
     /// <summary>
     /// Полная загрузка ФИАС. Если <paramref name="localZipPath"/> указан и существует —

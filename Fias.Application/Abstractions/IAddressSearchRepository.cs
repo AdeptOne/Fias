@@ -7,7 +7,12 @@ namespace Fias.Application.Abstractions;
 public interface IAddressSearchRepository
 {
     Task<IReadOnlyList<AddressSearchHit>> SearchByNameAsync(
-        string query, int limit, double threshold, CancellationToken ct);
+        string query,
+        int limit,
+        double threshold,
+        int? levelFilter,
+        IReadOnlyCollection<long>? restrictToObjectIds,
+        CancellationToken ct);
 }
 
 /// <summary>Сырая строка результата поиска до построения адресной строки.</summary>

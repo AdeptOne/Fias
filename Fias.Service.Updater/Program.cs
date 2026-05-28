@@ -40,6 +40,7 @@ builder.Services.AddScoped<IMigrator, Migrator>();
 builder.Services.AddScoped<IFiasVersionStore, FiasVersionStore>();
 builder.Services.AddScoped<IFiasImportOrchestrator, FiasImportOrchestrator>();
 builder.Services.AddScoped<FiasUpdateJob>();
+builder.Services.AddScoped<Fias.Application.Services.IFiasUpdateJob>(sp => sp.GetRequiredService<FiasUpdateJob>());
 
 // Импортёры базового набора (см. «Правила формирования адресной строки»).
 builder.Services.AddSingleton<IFiasEntityImporter, ReestrObjectImporter>();

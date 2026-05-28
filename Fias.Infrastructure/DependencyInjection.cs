@@ -1,4 +1,6 @@
 using Fias.Application.Abstractions;
+using Fias.Application.Services;
+using Fias.Infrastructure.Hangfire;
 using Fias.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -19,9 +21,10 @@ public static class DependencyInjection
             opt.UseLowerCaseNamingConvention();
         });
 
-        // Application запрашивает IFiasDbContext — отдаём ему уже зарегистрированный FiasDbContext.
         services.AddScoped<IFiasDbContext>(sp => sp.GetRequiredService<FiasDbContext>());
         services.AddScoped<IAddressSearchRepository, AddressSearchRepository>();
+        services.AddScoped<IFiasVersionProvider, FiasVersionProvider>();
+        services.AddScoped<IAdminImportService, AdminImportService>();
 
         return services;
     }

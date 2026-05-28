@@ -10,10 +10,23 @@ namespace Fias.Infrastructure.Persistence;
 public class AddressSearchRepository(FiasDbContext db) : IAddressSearchRepository
 {
     public async Task<IReadOnlyList<AddressSearchHit>> SearchByNameAsync(
-        string query, int limit, double threshold, CancellationToken ct)
+        string query,
+        int limit,
+        double threshold,
+        int? levelFilter,
+        IReadOnlyCollection<long>? restrictToObjectIds,
+        CancellationToken ct)
     {
-        var rows = await db.AddressObjects.AsNoTracking()
-            .Where(a => a.IsActual == 1 && a.IsActive == 1 && a.Name != null)
+        var q = db.AddressObjects.AsNoTracking()
+            .Where(a => a.IsActual == 1 && a.IsActive == 1 && a.Name != null);
+
+        if (levelFilter is { } lvl)
+            q = q.Where(a => a.Level == lvl);
+
+        if (restrictToObjectIds is { Count: > 0 } ids)
+            q = q.Where(a => ids.Contains(a.ObjectId));
+
+        var rows = await q
             .Select(a => new
             {
                 a.ObjectId,

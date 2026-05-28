@@ -9,6 +9,11 @@ public static class DependencyInjection
     {
         services.AddScoped<IAddressBuilderService, AddressBuilderService>();
         services.AddScoped<IAddressSearchService, AddressSearchService>();
+        services.AddScoped<IBatchAddressService, BatchAddressService>();
+        services.AddScoped<IHierarchyService, HierarchyService>();
+        services.AddScoped<IReferencesService, ReferencesService>();
+        services.AddScoped<IServiceInfoService, ServiceInfoService>();
+        services.AddScoped<IAddressParseService, AddressParseService>();
         return services;
     }
 }
