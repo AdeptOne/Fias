@@ -33,6 +33,9 @@ public class FiasImportOrchestrator(
         var zipPath = await ResolveFullArchivePathAsync(localZipPath, ct);
         logger.LogInformation("Полный импорт ФИАС из {Path}", zipPath);
 
+        // Полная перезаливка — чистим все таблицы базового набора, чтобы COPY не упирался в PK.
+        await migrator.TruncateAllAsync(ct);
+
         await ProcessArchiveAsync(zipPath, ImportMode.Full, ct);
 
         var info = await fnsClient.GetLastAsync(ct);

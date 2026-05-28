@@ -39,10 +39,20 @@ builder.Services.AddSingleton<IFiasArchiveReader, FiasArchiveReader>();
 builder.Services.AddSingleton<IFiasImportOrchestrator, FiasImportOrchestrator>();
 builder.Services.AddScoped<FiasUpdateJob>();
 
-// Импортёры. Сейчас полностью реализованы только два — остальные сущности из архива
-// будут безопасно пропущены оркестратором до их реализации (см. CopyImporterBase).
+// Импортёры базового набора (см. «Правила формирования адресной строки»).
+builder.Services.AddSingleton<IFiasEntityImporter, ReestrObjectImporter>();
 builder.Services.AddSingleton<IFiasEntityImporter, AddressObjectImporter>();
+builder.Services.AddSingleton<IFiasEntityImporter, HouseImporter>();
+builder.Services.AddSingleton<IFiasEntityImporter, ApartmentImporter>();
+builder.Services.AddSingleton<IFiasEntityImporter, RoomImporter>();
+builder.Services.AddSingleton<IFiasEntityImporter, MunHierarchyImporter>();
+builder.Services.AddSingleton<IFiasEntityImporter, AdmHierarchyImporter>();
 builder.Services.AddSingleton<IFiasEntityImporter, AddressObjectTypeImporter>();
+builder.Services.AddSingleton<IFiasEntityImporter, HouseTypeImporter>();
+builder.Services.AddSingleton<IFiasEntityImporter, ApartmentTypeImporter>();
+builder.Services.AddSingleton<IFiasEntityImporter, RoomTypeImporter>();
+builder.Services.AddSingleton<IFiasEntityImporter, ObjectLevelImporter>();
+builder.Services.AddSingleton<IFiasEntityImporter, ParamImporter>();
 builder.Services.AddSingleton<IFiasEntityImporterRegistry, FiasEntityImporterRegistry>();
 
 builder.Services.AddHttpClient<IFiasFnsClient, FiasFnsClient>(c =>

@@ -8,24 +8,21 @@ using NpgsqlTypes;
 
 namespace Fias.Service.Updater.Services.Importing;
 
-public class AddressObjectImporter(
+public class ApartmentImporter(
     INpgsqlConnectionFactory factory,
     IOptions<FiasOptions> options,
-    ILogger<AddressObjectImporter> logger)
+    ILogger<ApartmentImporter> logger)
     : CopyImporterBase(factory, options, logger)
 {
-    public override FiasEntityKind Kind => FiasEntityKind.AddressObjects;
-
-    protected override string TableName => "fias.addressobjects";
-
-    protected override string RecordElementName => "OBJECT";
+    public override FiasEntityKind Kind => FiasEntityKind.Apartments;
+    protected override string TableName => "fias.apartments";
+    protected override string RecordElementName => "APARTMENT";
 
     protected override IReadOnlyList<string> Columns =>
     [
-        "id", "objectid", "objectguid", "name", "typename", "level",
+        "id", "objectid", "objectguid", "number", "aparttype",
         "opertypeid", "previd", "nextid",
-        "updatedate", "startdate", "enddate",
-        "isactual", "isactive"
+        "updatedate", "startdate", "enddate", "isactual", "isactive"
     ];
 
     protected override async Task WriteRowAsync(NpgsqlBinaryImporter w, XmlReader r, CancellationToken ct)
@@ -33,9 +30,8 @@ public class AddressObjectImporter(
         await w.WriteAsync(XmlHelpers.GetLong(r, "ID") ?? 0L, NpgsqlDbType.Bigint, ct);
         await w.WriteAsync(XmlHelpers.GetLong(r, "OBJECTID") ?? 0L, NpgsqlDbType.Bigint, ct);
         await WriteNullable(w, XmlHelpers.GetGuid(r, "OBJECTGUID"), NpgsqlDbType.Uuid, ct);
-        await WriteNullable(w, XmlHelpers.GetString(r, "NAME"), NpgsqlDbType.Text, ct);
-        await WriteNullable(w, XmlHelpers.GetString(r, "TYPENAME"), NpgsqlDbType.Text, ct);
-        await WriteNullable(w, XmlHelpers.GetInt(r, "LEVEL"), NpgsqlDbType.Integer, ct);
+        await WriteNullable(w, XmlHelpers.GetString(r, "NUMBER"), NpgsqlDbType.Text, ct);
+        await WriteNullable(w, XmlHelpers.GetInt(r, "APARTTYPE"), NpgsqlDbType.Integer, ct);
         await WriteNullable(w, XmlHelpers.GetInt(r, "OPERTYPEID"), NpgsqlDbType.Integer, ct);
         await WriteNullable(w, XmlHelpers.GetLong(r, "PREVID"), NpgsqlDbType.Bigint, ct);
         await WriteNullable(w, XmlHelpers.GetLong(r, "NEXTID"), NpgsqlDbType.Bigint, ct);
@@ -48,25 +44,25 @@ public class AddressObjectImporter(
 
     protected override string BuildUpsertFromStagingSql(string staging) => $"""
         INSERT INTO {TableName} AS t
-            (id, objectid, objectguid, name, typename, level, opertypeid, previd, nextid,
+            (id, objectid, objectguid, number, aparttype,
+             opertypeid, previd, nextid,
              updatedate, startdate, enddate, isactual, isactive)
-        SELECT id, objectid, objectguid, name, typename, level, opertypeid, previd, nextid,
+        SELECT id, objectid, objectguid, number, aparttype,
+               opertypeid, previd, nextid,
                updatedate, startdate, enddate, isactual, isactive
           FROM {staging}
         ON CONFLICT (id) DO UPDATE SET
-            objectid    = excluded.objectid,
-            objectguid  = excluded.objectguid,
-            name        = excluded.name,
-            typename    = excluded.typename,
-            level       = excluded.level,
-            opertypeid  = excluded.opertypeid,
-            previd      = excluded.previd,
-            nextid      = excluded.nextid,
-            updatedate  = excluded.updatedate,
-            startdate   = excluded.startdate,
-            enddate     = excluded.enddate,
-            isactual    = excluded.isactual,
-            isactive    = excluded.isactive;
+            objectid   = excluded.objectid,
+            objectguid = excluded.objectguid,
+            number     = excluded.number,
+            aparttype  = excluded.aparttype,
+            opertypeid = excluded.opertypeid,
+            previd     = excluded.previd,
+            nextid     = excluded.nextid,
+            updatedate = excluded.updatedate,
+            startdate  = excluded.startdate,
+            enddate    = excluded.enddate,
+            isactual   = excluded.isactual,
+            isactive   = excluded.isactive;
         """;
-
 }

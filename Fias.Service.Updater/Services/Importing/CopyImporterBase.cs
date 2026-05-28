@@ -98,8 +98,9 @@ public abstract class CopyImporterBase(
 
     private async Task CreateStagingTableAsync(NpgsqlConnection conn, string table, CancellationToken ct)
     {
+        // TEMP-таблица живёт до конца сессии (соединения). Мы её явно дропаем в конце сценария.
         await using var cmd = new NpgsqlCommand(
-            $"CREATE TEMP TABLE {table} (LIKE {TableName} INCLUDING DEFAULTS) ON COMMIT DROP", conn);
+            $"CREATE TEMP TABLE {table} (LIKE {TableName} INCLUDING DEFAULTS)", conn);
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
@@ -119,5 +120,18 @@ public abstract class CopyImporterBase(
     {
         await using var cmd = new NpgsqlCommand($"TRUNCATE TABLE {TableName}", conn);
         await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    protected static async Task WriteNullable<T>(NpgsqlBinaryImporter w, T? value, NpgsqlTypes.NpgsqlDbType type, CancellationToken ct)
+        where T : struct
+    {
+        if (value.HasValue) await w.WriteAsync(value.Value, type, ct);
+        else await w.WriteNullAsync(ct);
+    }
+
+    protected static async Task WriteNullable(NpgsqlBinaryImporter w, string? value, NpgsqlTypes.NpgsqlDbType type, CancellationToken ct)
+    {
+        if (value is not null) await w.WriteAsync(value, type, ct);
+        else await w.WriteNullAsync(ct);
     }
 }

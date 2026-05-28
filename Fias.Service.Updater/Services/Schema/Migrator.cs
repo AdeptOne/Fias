@@ -6,10 +6,28 @@ namespace Fias.Service.Updater.Services.Schema;
 public interface IMigrator
 {
     Task EnsureSchemaAsync(CancellationToken ct);
+    Task TruncateAllAsync(CancellationToken ct);
 }
 
 public class Migrator(INpgsqlConnectionFactory factory, ILogger<Migrator> logger) : IMigrator
 {
+    private static readonly string[] DataTables =
+    [
+        "fias.reestr_objects",
+        "fias.addressobjects",
+        "fias.houses",
+        "fias.apartments",
+        "fias.rooms",
+        "fias.mun_hierarchy",
+        "fias.adm_hierarchy",
+        "fias.addressobject_types",
+        "fias.house_types",
+        "fias.apartment_types",
+        "fias.room_types",
+        "fias.object_levels",
+        "fias.params"
+    ];
+
     public async Task EnsureSchemaAsync(CancellationToken ct)
     {
         logger.LogInformation("Применяем схему fias.*");
@@ -19,6 +37,16 @@ public class Migrator(INpgsqlConnectionFactory factory, ILogger<Migrator> logger
         await cmd.ExecuteNonQueryAsync(ct);
 
         logger.LogInformation("Схема актуальна");
+    }
+
+    public async Task TruncateAllAsync(CancellationToken ct)
+    {
+        logger.LogWarning("Полная очистка таблиц fias.* перед перезаливкой");
+
+        await using var conn = await factory.OpenAsync(ct);
+        var sql = "TRUNCATE TABLE " + string.Join(", ", DataTables) + " RESTART IDENTITY";
+        await using var cmd = new NpgsqlCommand(sql, conn);
+        await cmd.ExecuteNonQueryAsync(ct);
     }
 
     // Схема покрывает базовый набор по документу «Правила формирования адресной строки».

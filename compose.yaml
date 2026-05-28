@@ -4,6 +4,8 @@ services:
     environment:
       POSTGRES_DB: fias
       POSTGRES_PASSWORD: secret
+    ports:
+      - "5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
 
@@ -28,7 +30,6 @@ services:
       ConnectionStrings__Default: "Host=postgres;Database=fias;Username=postgres;Password=secret"
       Fias__ImportDirectory: "/fias/import"
     volumes:
-      # Локальная папка для подкладывания gar_xml.zip "под ноги" воркеру.
       - ./fias-import:/fias/import
 
 volumes:

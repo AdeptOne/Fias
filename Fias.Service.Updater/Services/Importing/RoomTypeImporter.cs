@@ -8,28 +8,22 @@ using NpgsqlTypes;
 
 namespace Fias.Service.Updater.Services.Importing;
 
-public class AddressObjectTypeImporter(
+public class RoomTypeImporter(
     INpgsqlConnectionFactory factory,
     IOptions<FiasOptions> options,
-    ILogger<AddressObjectTypeImporter> logger)
+    ILogger<RoomTypeImporter> logger)
     : CopyImporterBase(factory, options, logger)
 {
-    public override FiasEntityKind Kind => FiasEntityKind.AddressObjectTypes;
-
-    protected override string TableName => "fias.addressobject_types";
-
-    protected override string RecordElementName => "ADDRESSOBJECTTYPE";
+    public override FiasEntityKind Kind => FiasEntityKind.RoomTypes;
+    protected override string TableName => "fias.room_types";
+    protected override string RecordElementName => "ROOMTYPE";
 
     protected override IReadOnlyList<string> Columns =>
-    [
-        "id", "level", "shortname", "name",
-        "startdate", "enddate", "updatedate", "isactive"
-    ];
+        ["id", "shortname", "name", "startdate", "enddate", "updatedate", "isactive"];
 
     protected override async Task WriteRowAsync(NpgsqlBinaryImporter w, XmlReader r, CancellationToken ct)
     {
         await w.WriteAsync(XmlHelpers.GetInt(r, "ID") ?? 0, NpgsqlDbType.Integer, ct);
-        await WriteNullable(w, XmlHelpers.GetInt(r, "LEVEL"), NpgsqlDbType.Integer, ct);
         await WriteNullable(w, XmlHelpers.GetString(r, "SHORTNAME"), NpgsqlDbType.Text, ct);
         await WriteNullable(w, XmlHelpers.GetString(r, "NAME"), NpgsqlDbType.Text, ct);
         await WriteNullable(w, XmlHelpers.GetDate(r, "STARTDATE"), NpgsqlDbType.Date, ct);
@@ -40,11 +34,10 @@ public class AddressObjectTypeImporter(
 
     protected override string BuildUpsertFromStagingSql(string staging) => $"""
         INSERT INTO {TableName} AS t
-            (id, level, shortname, name, startdate, enddate, updatedate, isactive)
-        SELECT id, level, shortname, name, startdate, enddate, updatedate, isactive
+            (id, shortname, name, startdate, enddate, updatedate, isactive)
+        SELECT id, shortname, name, startdate, enddate, updatedate, isactive
           FROM {staging}
         ON CONFLICT (id) DO UPDATE SET
-            level      = excluded.level,
             shortname  = excluded.shortname,
             name       = excluded.name,
             startdate  = excluded.startdate,
