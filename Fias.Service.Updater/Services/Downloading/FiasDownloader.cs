@@ -51,14 +51,71 @@ public class FiasDownloader(
         using var response = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct);
         response.EnsureSuccessStatusCode();
 
+        var total = response.Content.Headers.ContentLength;
         await using (var src = await response.Content.ReadAsStreamAsync(ct))
         await using (var dst = File.Create(tempPath))
         {
-            await src.CopyToAsync(dst, ct);
+            await CopyWithProgressAsync(src, dst, total, targetPath, ct);
         }
 
         File.Move(tempPath, targetPath, overwrite: true);
-        logger.LogInformation("Скачано: {Path} ({Length} байт)", targetPath, new FileInfo(targetPath).Length);
+        logger.LogInformation("Скачано: {Path} ({Length:N0} байт)", targetPath, new FileInfo(targetPath).Length);
         return targetPath;
+    }
+
+    /// <summary>
+    /// Копирует поток буферами по 80 КБ, периодически логируя прогресс — раз в 3 секунды
+    /// или каждые 50 МБ (что наступит раньше). Если Content-Length известен, в логе доля %.
+    /// </summary>
+    private async Task CopyWithProgressAsync(
+        Stream src, Stream dst, long? total, string targetPath, CancellationToken ct)
+    {
+        const int bufferSize = 81_920;
+        const long logEveryBytes = 50L * 1024 * 1024;
+        var logEveryInterval = TimeSpan.FromSeconds(3);
+
+        var buffer = new byte[bufferSize];
+        long copied = 0;
+        long lastLoggedBytes = 0;
+        var started = DateTime.UtcNow;
+        var lastLoggedAt = started;
+        var fileName = Path.GetFileName(targetPath);
+
+        int read;
+        while ((read = await src.ReadAsync(buffer.AsMemory(0, bufferSize), ct)) > 0)
+        {
+            await dst.WriteAsync(buffer.AsMemory(0, read), ct);
+            copied += read;
+
+            var now = DateTime.UtcNow;
+            var deltaBytes = copied - lastLoggedBytes;
+            if (deltaBytes >= logEveryBytes || now - lastLoggedAt >= logEveryInterval)
+            {
+                var elapsed = now - started;
+                var speedMBs = elapsed.TotalSeconds > 0
+                    ? copied / (1024d * 1024d) / elapsed.TotalSeconds
+                    : 0;
+
+                if (total is { } t && t > 0)
+                {
+                    var percent = copied * 100d / t;
+                    var etaSeconds = speedMBs > 0
+                        ? (t - copied) / (speedMBs * 1024 * 1024)
+                        : 0;
+                    logger.LogInformation(
+                        "{File}: {Copied:N0} / {Total:N0} байт ({Percent:F1}%), {Speed:F1} MB/s, ETA {Eta:F0}s",
+                        fileName, copied, t, percent, speedMBs, etaSeconds);
+                }
+                else
+                {
+                    logger.LogInformation(
+                        "{File}: {Copied:N0} байт, {Speed:F1} MB/s",
+                        fileName, copied, speedMBs);
+                }
+
+                lastLoggedBytes = copied;
+                lastLoggedAt = now;
+            }
+        }
     }
 }
