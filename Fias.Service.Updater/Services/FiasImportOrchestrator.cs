@@ -77,10 +77,10 @@ public class FiasImportOrchestrator(
         logger.LogInformation("Дельта применена, версия {VersionId}", info.VersionId);
     }
 
-    private async Task<string> ResolveFullArchivePathAsync(string? localZipPath, IProgressSink progress, CancellationToken ct)
+    private Task<string> ResolveFullArchivePathAsync(string? localZipPath, IProgressSink progress, CancellationToken ct)
     {
         if (!string.IsNullOrWhiteSpace(localZipPath) && File.Exists(localZipPath))
-            return localZipPath;
+            return Task.FromResult(localZipPath);
 
         // Если параметр не указан — пробуем стандартный путь в ImportDirectory ("файл из под ног").
         var defaultPath = Path.Combine(_options.ImportDirectory, _options.FullArchiveFileName);
@@ -88,13 +88,16 @@ public class FiasImportOrchestrator(
         {
             progress.WriteLine($"Используем локальный файл {defaultPath}");
             logger.LogInformation("Используем локальный файл {Path}", defaultPath);
-            return defaultPath;
+            return Task.FromResult(defaultPath);
         }
 
-        progress.WriteLine("Локальный файл не найден, скачиваем полную выгрузку с ФНС");
-        logger.LogInformation("Локальный файл не найден, скачиваем полную выгрузку с ФНС");
-        var info = await fnsClient.GetLastAsync(ct);
-        return await downloader.EnsureFullAsync(info, progress, ct);
+        // Полная выгрузка только из локального архива — автоскачивание с ФНС отключено.
+        var message =
+            $"Локальный архив полной выгрузки не найден. Укажите путь явно или положите файл " +
+            $"'{_options.FullArchiveFileName}' в каталог '{_options.ImportDirectory}'.";
+        progress.WriteLine(message);
+        logger.LogError(message);
+        throw new FileNotFoundException(message, defaultPath);
     }
 
     private async Task ProcessArchiveAsync(string zipPath, ImportMode mode, IProgressSink progress, CancellationToken ct)

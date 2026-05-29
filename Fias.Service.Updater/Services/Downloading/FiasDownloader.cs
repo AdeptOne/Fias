@@ -8,9 +8,6 @@ public interface IFiasDownloader
 {
     /// <summary>Возвращает путь к локальному ZIP с дельтой (скачивает если нужно).</summary>
     Task<string> EnsureDeltaAsync(DownloadFileInfo info, IProgressSink progress, CancellationToken ct);
-
-    /// <summary>Возвращает путь к локальному ZIP с полной выгрузкой (скачивает если нужно).</summary>
-    Task<string> EnsureFullAsync(DownloadFileInfo info, IProgressSink progress, CancellationToken ct);
 }
 
 public class FiasDownloader(
@@ -25,14 +22,6 @@ public class FiasDownloader(
         var url = info.GarXmlDeltaUrl
                   ?? $"{_options.ActualDownloadsBaseUrl.TrimEnd('/')}/{_options.DeltaArchiveFileName}";
         var target = Path.Combine(_options.ImportDirectory, $"gar_delta_xml_{info.VersionId}.zip");
-        return DownloadIfMissingAsync(url, target, progress, ct);
-    }
-
-    public Task<string> EnsureFullAsync(DownloadFileInfo info, IProgressSink progress, CancellationToken ct)
-    {
-        var url = info.GarXmlFullUrl
-                  ?? $"{_options.ActualDownloadsBaseUrl.TrimEnd('/')}/{_options.FullArchiveFileName}";
-        var target = Path.Combine(_options.ImportDirectory, $"gar_xml_{info.VersionId}.zip");
         return DownloadIfMissingAsync(url, target, progress, ct);
     }
 

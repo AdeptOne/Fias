@@ -21,7 +21,14 @@ public enum FiasEntityKind
     ApartmentTypes,
     RoomTypes,
     ObjectLevels,
-    Param,
+    // Параметры разбиты по семействам объектов: XML-ID уникален только внутри семейства,
+    // между семействами ID пересекаются, поэтому в БД ключ составной (objtype, id).
+    ParamAddrObj,
+    ParamHouses,
+    ParamApartments,
+    ParamRooms,
+    ParamSteads,
+    ParamCarplaces,
     ChangeHistory,
     AddhouseTypes
 }
@@ -30,6 +37,17 @@ public static class FiasEntityKindResolver
 {
     private static readonly (string Prefix, FiasEntityKind Kind)[] Map =
     [
+        // Параметры (PARAMS) — все семейства идут в одну таблицу fias.params.
+        // ВАЖНО: эти префиксы должны стоять РАНЬШЕ объектных (AS_ADDR_OBJ_, AS_HOUSES_ и т.п.),
+        // иначе, например, AS_ADDR_OBJ_PARAMS перехватится как AS_ADDR_OBJ_. Справочник
+        // AS_PARAM_TYPES не маршрутизируем сюда — он не входит в базовый набор.
+        ("AS_ADDR_OBJ_PARAMS_",    FiasEntityKind.ParamAddrObj),
+        ("AS_HOUSES_PARAMS_",      FiasEntityKind.ParamHouses),
+        ("AS_APARTMENTS_PARAMS_",  FiasEntityKind.ParamApartments),
+        ("AS_ROOMS_PARAMS_",       FiasEntityKind.ParamRooms),
+        ("AS_STEADS_PARAMS_",      FiasEntityKind.ParamSteads),
+        ("AS_CARPLACES_PARAMS_",   FiasEntityKind.ParamCarplaces),
+
         ("AS_REESTR_OBJECTS_",     FiasEntityKind.ReestrObjects),
         ("AS_ADDR_OBJ_TYPES_",     FiasEntityKind.AddressObjectTypes),
         ("AS_ADDR_OBJ_",           FiasEntityKind.AddressObjects),
@@ -44,7 +62,6 @@ public static class FiasEntityKindResolver
         ("AS_MUN_HIERARCHY_",      FiasEntityKind.MunHierarchy),
         ("AS_ADM_HIERARCHY_",      FiasEntityKind.AdmHierarchy),
         ("AS_OBJECT_LEVELS_",      FiasEntityKind.ObjectLevels),
-        ("AS_PARAM_",              FiasEntityKind.Param),
         ("AS_CHANGE_HISTORY_",     FiasEntityKind.ChangeHistory),
         ("AS_ADDHOUSE_TYPES_",     FiasEntityKind.AddhouseTypes),
     ];

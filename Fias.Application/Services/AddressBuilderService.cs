@@ -10,19 +10,39 @@ public class AddressBuilderService(IFiasDbContext db) : IAddressBuilderService
 {
     // Уровни ФИАС (см. OBJECT_LEVELS): 1..8 — адресообразующие, 9 — земельный участок,
     // 10 — здание, 11 — помещение, 12 — комната, 17 — машино-место.
+    private const int LevelRegion = 1;
+    private const int LevelAdmArea = 2;
     private const int LevelLand = 9;
     private const int LevelHouse = 10;
     private const int LevelApartment = 11;
     private const int LevelRoom = 12;
     private const int LevelCarplace = 17;
 
-    /// <summary>TYPEID параметра «Официальное наименование» в PARAM.</summary>
-    private const int OfficialNameTypeId = 16;
+    // TYPEID параметров из справочника ГАР AS_PARAM_TYPES.
+    private const int PtIfnsFl = 1;
+    private const int PtIfnsUl = 2;
+    private const int PtPostal = 5;
+    private const int PtOkato = 6;
+    private const int PtOktmo = 7;
+    private const int PtCadastr = 8;
+    private const int PtKladr = 11;       // PLAINCODE — код КЛАДР без признака актуальности.
+    private const int PtRegionCode = 12;
+    private const int PtOfficial = 16;    // Официальное наименование (обычно для субъектов РФ).
+    private const int PtOktmoBudget = 21;
+
+    private static readonly int[] RelevantParamTypeIds =
+    [
+        PtIfnsFl, PtIfnsUl, PtPostal, PtOkato, PtOktmo, PtCadastr,
+        PtKladr, PtRegionCode, PtOfficial, PtOktmoBudget
+    ];
+
+    /// <summary>Тип адресации: 1 — административное деление (строим по adm_hierarchy).</summary>
+    private const int AdmAddressType = 1;
 
     public async Task<AddressDto?> BuildByObjectIdAsync(long objectId, CancellationToken ct)
     {
         var hierarchy = await db.AdmHierarchy.AsNoTracking()
-            .Where(h => h.ObjectId == objectId && h.IsActive == 1)
+            .Where(h => h.ObjectId == objectId && h.IsActive == true)
             .Select(h => new { h.ObjectId, h.Path })
             .FirstOrDefaultAsync(ct);
 
@@ -34,7 +54,7 @@ public class AddressBuilderService(IFiasDbContext db) : IAddressBuilderService
     public async Task<AddressDto?> BuildByObjectGuidAsync(Guid objectGuid, CancellationToken ct)
     {
         var objectId = await db.AddressObjects.AsNoTracking()
-            .Where(a => a.ObjectGuid == objectGuid && a.IsActual == 1 && a.IsActive == 1)
+            .Where(a => a.ObjectGuid == objectGuid && a.IsActual == true && a.IsActive == true)
             .Select(a => (long?)a.ObjectId)
             .FirstOrDefaultAsync(ct);
 
@@ -54,45 +74,50 @@ public class AddressBuilderService(IFiasDbContext db) : IAddressBuilderService
 
         // 2. Подгружаем основные данные по группам уровней одним запросом каждая.
         var addressList = await db.AddressObjects.AsNoTracking()
-            .Where(a => a.IsActual == 1 && a.IsActive == 1 && ids.Contains(a.ObjectId))
+            .Where(a => a.IsActual == true && a.IsActive == true && ids.Contains(a.ObjectId))
             .ToListAsync(ct);
         var addressDict = addressList.GroupBy(a => a.ObjectId).ToDictionary(g => g.Key, g => g.First());
 
         var houseList = await db.Houses.AsNoTracking()
-            .Where(h => h.IsActual == 1 && h.IsActive == 1 && ids.Contains(h.ObjectId))
+            .Where(h => h.IsActual == true && h.IsActive == true && ids.Contains(h.ObjectId))
             .ToListAsync(ct);
         var houseDict = houseList.GroupBy(h => h.ObjectId).ToDictionary(g => g.Key, g => g.First());
 
         var apartmentList = await db.Apartments.AsNoTracking()
-            .Where(a => a.IsActual == 1 && a.IsActive == 1 && ids.Contains(a.ObjectId))
+            .Where(a => a.IsActual == true && a.IsActive == true && ids.Contains(a.ObjectId))
             .ToListAsync(ct);
         var apartmentDict = apartmentList.GroupBy(a => a.ObjectId).ToDictionary(g => g.Key, g => g.First());
 
         var roomList = await db.Rooms.AsNoTracking()
-            .Where(r => r.IsActual == 1 && r.IsActive == 1 && ids.Contains(r.ObjectId))
+            .Where(r => r.IsActual == true && r.IsActive == true && ids.Contains(r.ObjectId))
             .ToListAsync(ct);
         var roomDict = roomList.GroupBy(r => r.ObjectId).ToDictionary(g => g.Key, g => g.First());
 
-        // 3. Параметры «Официальное наименование» (TYPEID=16) — для Level 1, 3, 4.
-        //    Грузим плоско и группируем на клиенте: EF Core 8 не транслирует
-        //    GroupBy → OrderByDescending().First() в одном запросе.
+        // 3. Параметры (PARAM) по нужным TYPEID — индекс, ОКАТО, ОКТМО, КЛАДР, кадастр и т.д.
+        //    Грузим плоско и группируем на клиенте (EF Core не транслирует GroupBy→First()).
+        //    Сортировка по StartDate/Id desc — берём актуальное значение каждого (object, typeid).
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
-        var officialRows = await db.Params.AsNoTracking()
+        var paramRows = await db.Params.AsNoTracking()
             .Where(p => ids.Contains(p.ObjectId)
-                        && p.TypeId == OfficialNameTypeId
+                        && p.TypeId != null && RelevantParamTypeIds.Contains(p.TypeId.Value)
                         && (p.EndDate == null || p.EndDate > today))
-            .OrderBy(p => p.ObjectId).ThenByDescending(p => p.StartDate)
-            .Select(p => new { p.ObjectId, p.Value })
+            .OrderBy(p => p.ObjectId).ThenBy(p => p.TypeId)
+            .ThenByDescending(p => p.StartDate).ThenByDescending(p => p.Id)
+            .Select(p => new { p.ObjectId, p.TypeId, p.Value })
             .ToListAsync(ct);
-        var officialNames = officialRows
-            .GroupBy(x => x.ObjectId)
-            .ToDictionary(g => g.Key, g => g.First().Value);
 
-        // 4. Справочники типов — небольшие, грузим целиком в память (активные записи).
-        //    AddressObjectType индексируем по (Level, ShortName) для O(1) lookup;
-        //    ShortName тримим — в данных ФИАС встречаются пробелы.
+        var paramsByObj = new Dictionary<long, Dictionary<int, string>>();
+        foreach (var row in paramRows)
+        {
+            if (row.TypeId is not int tid || string.IsNullOrWhiteSpace(row.Value)) continue;
+            if (!paramsByObj.TryGetValue(row.ObjectId, out var byType))
+                paramsByObj[row.ObjectId] = byType = new Dictionary<int, string>();
+            byType.TryAdd(tid, row.Value.Trim()); // первое = актуальное (благодаря сортировке)
+        }
+
+        // 4. Справочники типов — небольшие, грузим целиком (активные записи).
         var addressTypeList = await db.AddressObjectTypes.AsNoTracking()
-            .Where(t => t.IsActive == 1)
+            .Where(t => t.IsActive == true)
             .ToListAsync(ct);
         var addressTypeByLevelShort = addressTypeList
             .Where(t => t.Level is not null && !string.IsNullOrWhiteSpace(t.ShortName))
@@ -103,47 +128,207 @@ public class AddressBuilderService(IFiasDbContext db) : IAddressBuilderService
             .GroupBy(t => t.Level!.Value)
             .ToDictionary(g => g.Key, g => g.First());
 
-        var houseTypes = await db.HouseTypes.AsNoTracking().Where(t => t.IsActive == 1).ToDictionaryAsync(t => t.Id, ct);
-        var apartmentTypes = await db.ApartmentTypes.AsNoTracking().Where(t => t.IsActive == 1).ToDictionaryAsync(t => t.Id, ct);
-        var roomTypes = await db.RoomTypes.AsNoTracking().Where(t => t.IsActive == 1).ToDictionaryAsync(t => t.Id, ct);
+        var houseTypes = await db.HouseTypes.AsNoTracking().Where(t => t.IsActive == true).ToDictionaryAsync(t => t.Id, ct);
+        var apartmentTypes = await db.ApartmentTypes.AsNoTracking().Where(t => t.IsActive == true).ToDictionaryAsync(t => t.Id, ct);
+        var roomTypes = await db.RoomTypes.AsNoTracking().Where(t => t.IsActive == true).ToDictionaryAsync(t => t.Id, ct);
 
         // 5. Собираем иерархию по порядку из PATH.
         var items = new List<AddressHierarchyItemDto>(ids.Count);
+        int? regionCode = null;
+
         foreach (var id in ids)
         {
             if (!levels.TryGetValue(id, out var lvl) || lvl.LevelId is null)
                 continue;
 
             var level = lvl.LevelId.Value;
+            var objParams = paramsByObj.GetValueOrDefault(id);
+            var official = objParams?.GetValueOrDefault(PtOfficial);
+            var kladr = objParams?.GetValueOrDefault(PtKladr);
+
             var (typeFull, typeShort, name) = ResolveNameAndType(
                 id, level, addressDict, houseDict, apartmentDict, roomDict,
                 addressTypeByLevelShort, addressTypeByLevel, houseTypes, apartmentTypes, roomTypes);
 
-            // Официальное наименование перекрывает type + name, если оно активно.
-            string fullName;
-            if (officialNames.TryGetValue(id, out var official) && !string.IsNullOrWhiteSpace(official))
+            var (fullName, fullNameShort) = ComposeNames(level, typeFull, typeShort, name, official);
+            var objectType = ObjectType(level);
+
+            if (level == LevelRegion)
+                regionCode = ResolveRegionCode(objParams, kladr);
+
+            if (objectType == "house" && houseDict.TryGetValue(id, out var house))
             {
-                fullName = official;
+                items.Add(new AddressHierarchyItemDto(
+                    ObjectType: objectType,
+                    ObjectId: id,
+                    ObjectLevelId: level,
+                    ObjectGuid: lvl.ObjectGuid,
+                    FullName: fullName,
+                    FullNameShort: fullNameShort,
+                    HierarchyPlace: HierarchyPlace(level),
+                    TypeName: typeFull,
+                    TypeShortName: typeShort,
+                    Number: house.HouseNum?.Trim() ?? string.Empty,
+                    AddNumber1: house.AddNum1?.Trim() ?? string.Empty,
+                    AddType1Name: string.Empty,
+                    AddType1ShortName: string.Empty,
+                    AddNumber2: house.AddNum2?.Trim() ?? string.Empty,
+                    AddType2Name: string.Empty,
+                    AddType2ShortName: string.Empty));
+            }
+            else if (objectType is "apartment" or "room")
+            {
+                items.Add(new AddressHierarchyItemDto(
+                    ObjectType: objectType,
+                    ObjectId: id,
+                    ObjectLevelId: level,
+                    ObjectGuid: lvl.ObjectGuid,
+                    FullName: fullName,
+                    FullNameShort: fullNameShort,
+                    HierarchyPlace: HierarchyPlace(level),
+                    TypeName: typeFull,
+                    TypeShortName: typeShort,
+                    Number: name ?? string.Empty));
             }
             else
             {
-                fullName = string.IsNullOrEmpty(typeFull)
-                    ? name ?? string.Empty
-                    : string.IsNullOrEmpty(name) ? typeFull : $"{typeFull} {name}";
+                items.Add(new AddressHierarchyItemDto(
+                    ObjectType: objectType,
+                    ObjectId: id,
+                    ObjectLevelId: level,
+                    ObjectGuid: lvl.ObjectGuid,
+                    FullName: fullName,
+                    FullNameShort: fullNameShort,
+                    HierarchyPlace: HierarchyPlace(level),
+                    TypeName: typeFull,
+                    TypeShortName: typeShort,
+                    TypeFormCode: 0,
+                    Name: name,
+                    RegionCode: level == LevelRegion ? regionCode : null,
+                    KladrCode: kladr));
             }
-
-            items.Add(new AddressHierarchyItemDto(id, lvl.ObjectGuid, level, typeFull, typeShort, name, fullName));
         }
 
         if (items.Count == 0) return null;
 
         var leaf = items[^1];
+        var leafLevel = leaf.ObjectLevelId;
         var fullAddress = string.Join(", ", items.Select(i => i.FullName));
-        var shortAddress = string.Join(", ", items.Select(i =>
-            string.IsNullOrEmpty(i.ShortType) ? i.Name ?? string.Empty : $"{i.ShortType} {i.Name}"));
+        var leafParams = paramsByObj.GetValueOrDefault(leaf.ObjectId);
 
-        return new AddressDto(leaf.ObjectId, leaf.ObjectGuid, leaf.Level, fullAddress, shortAddress, items);
+        return new AddressDto(
+            ObjectId: leaf.ObjectId,
+            ObjectLevelId: leafLevel,
+            OperationTypeId: ResolveOperationType(leaf.ObjectId, leafLevel, addressDict, houseDict, apartmentDict, roomDict),
+            ObjectGuid: leaf.ObjectGuid,
+            AddressType: AdmAddressType,
+            FullName: fullAddress,
+            RegionCode: regionCode,
+            IsActive: true,
+            Path: path,
+            AddressDetails: BuildDetails(leafParams),
+            Hierarchy: items,
+            FederalDistrict: FederalDistrictCatalog.ByRegionCode(regionCode),
+            HierarchyPlace: leaf.HierarchyPlace);
     }
+
+    /// <summary>full_name и full_name_short по правилам ГАР: для региона/района тип после
+    /// наименования, для прочих — перед. full_name использует полный тип (в нижнем регистре),
+    /// short — сокращение. Официальное наименование (если есть) перекрывает оба.</summary>
+    private static (string full, string fullShort) ComposeNames(
+        int level, string? typeFull, string? typeShort, string? name, string? official)
+    {
+        if (!string.IsNullOrWhiteSpace(official))
+            return (official.Trim(), official.Trim());
+
+        var n = name?.Trim() ?? string.Empty;
+        var full = typeFull?.Trim().ToLowerInvariant() ?? string.Empty;
+        var shortType = typeShort?.Trim() ?? string.Empty;
+
+        var postfix = level is LevelRegion or LevelAdmArea; // область/край/район — тип после имени
+        return (Join(postfix, n, full), Join(postfix, n, shortType));
+    }
+
+    private static string Join(bool nameFirst, string name, string type)
+    {
+        if (string.IsNullOrEmpty(type)) return name;
+        if (string.IsNullOrEmpty(name)) return type;
+        return nameFirst ? $"{name} {type}" : $"{type} {name}";
+    }
+
+    private static string ObjectType(int level) => level switch
+    {
+        LevelRegion => "region",
+        LevelHouse => "house",
+        LevelApartment => "apartment",
+        LevelRoom => "room",
+        _ => "address_object"
+    };
+
+    /// <summary>
+    /// Позиция элемента в адресной строке по правилам ГАР (для административного деления).
+    /// Известные точки из эталона: L1→1, L2→2, L6→4, L8→6, L10→8.
+    /// </summary>
+    private static int HierarchyPlace(int level) => level switch
+    {
+        1 => 1,
+        2 => 2,
+        3 => 2,
+        4 => 3,
+        5 => 3,
+        6 => 4,
+        7 => 5,
+        8 => 6,
+        9 => 7,
+        10 => 8,
+        11 => 9,
+        12 => 10,
+        17 => 8,
+        _ => level
+    };
+
+    private static int? ResolveRegionCode(Dictionary<int, string>? objParams, string? kladr)
+    {
+        if (objParams?.GetValueOrDefault(PtRegionCode) is { } rc
+            && int.TryParse(rc.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed))
+            return parsed;
+
+        // Фолбэк: первые две цифры КЛАДР-кода субъекта.
+        if (kladr is { Length: >= 2 } code
+            && int.TryParse(code[..2], NumberStyles.Integer, CultureInfo.InvariantCulture, out var fromKladr))
+            return fromKladr;
+
+        return null;
+    }
+
+    private static AddressDetailsDto? BuildDetails(Dictionary<int, string>? p)
+    {
+        if (p is null) return null;
+        var details = new AddressDetailsDto(
+            PostalCode: p.GetValueOrDefault(PtPostal),
+            IfnsUl: p.GetValueOrDefault(PtIfnsUl),
+            IfnsFl: p.GetValueOrDefault(PtIfnsFl),
+            Okato: p.GetValueOrDefault(PtOkato),
+            Oktmo: p.GetValueOrDefault(PtOktmo),
+            CadastralNumber: p.GetValueOrDefault(PtCadastr),
+            OktmoBudget: p.GetValueOrDefault(PtOktmoBudget));
+
+        var empty = details is { PostalCode: null, IfnsUl: null, IfnsFl: null, Okato: null,
+            Oktmo: null, CadastralNumber: null, OktmoBudget: null };
+        return empty ? null : details;
+    }
+
+    private static int? ResolveOperationType(
+        long id, int level,
+        Dictionary<long, AddressObject> addrs, Dictionary<long, House> houses,
+        Dictionary<long, Apartment> apartments, Dictionary<long, Room> rooms)
+        => level switch
+        {
+            LevelHouse => houses.TryGetValue(id, out var h) ? h.OperTypeId : null,
+            LevelApartment => apartments.TryGetValue(id, out var a) ? a.OperTypeId : null,
+            LevelRoom => rooms.TryGetValue(id, out var r) ? r.OperTypeId : null,
+            _ => addrs.TryGetValue(id, out var ao) ? ao.OperTypeId : null
+        };
 
     private static (string? typeFull, string? typeShort, string? name) ResolveNameAndType(
         long objectId,
@@ -205,21 +390,12 @@ public class AddressBuilderService(IFiasDbContext db) : IAddressBuilderService
 
     private static string BuildHouseName(House h)
     {
-        // HOUSETYPE HOUSENUM [ADDTYPE1 ADDNUM1] [ADDTYPE2 ADDNUM2]
-        // Доп. типы (ADDTYPE1/2) — это идентификаторы из ADDHOUSE_TYPES, который мы пока не импортируем.
-        // Поэтому используем числовой код доп. типа как fallback (если есть).
+        // HOUSENUM [ADDNUM1] [ADDNUM2]. ADDHOUSE_TYPES не импортируем — доп. типы опускаем.
         var parts = new List<string>();
-        if (!string.IsNullOrEmpty(h.HouseNum)) parts.Add(h.HouseNum);
-        if (!string.IsNullOrEmpty(h.AddNum1)) parts.Add(JoinAdd(h.AddType1, h.AddNum1));
-        if (!string.IsNullOrEmpty(h.AddNum2)) parts.Add(JoinAdd(h.AddType2, h.AddNum2));
+        if (!string.IsNullOrEmpty(h.HouseNum)) parts.Add(h.HouseNum.Trim());
+        if (!string.IsNullOrEmpty(h.AddNum1)) parts.Add(h.AddNum1.Trim());
+        if (!string.IsNullOrEmpty(h.AddNum2)) parts.Add(h.AddNum2.Trim());
         return string.Join(" ", parts);
-    }
-
-    private static string JoinAdd(int? type, string num)
-    {
-        return type is null
-            ? num
-            : $"{type.Value.ToString(CultureInfo.InvariantCulture)} {num}";
     }
 
     private sealed class AddressTypeKeyComparer : IEqualityComparer<(int Level, string ShortName)>

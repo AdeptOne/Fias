@@ -11,9 +11,7 @@ namespace Fias.Api.Controllers;
 [Produces("application/json")]
 public class AddressesController(
     IAddressBuilderService builder,
-    IAddressSearchService search,
-    IBatchAddressService batch,
-    IAddressParseService parser) : ControllerBase
+    IAddressSearchService search) : ControllerBase
 {
     /// <summary>Полная адресная строка и иерархия по OBJECTID ФИАС.</summary>
     [HttpGet("{objectId:long}")]
@@ -57,6 +55,30 @@ public class AddressesController(
         return Ok(results);
     }
 
+    /// <summary>
+    /// Нечёткий поиск с полной структурой ГАР по каждому найденному объекту.
+    /// Возвращает { "addresses": [...] } — для каждого совпадения полный адрес с иерархией,
+    /// реквизитами (ОКАТО/ОКТМО/индекс/ИФНС/кадастр) и федеральным округом.
+    /// </summary>
+    /// <param name="q">Строка поиска (минимум 2 символа).</param>
+    /// <param name="limit">Максимум результатов, 1..100.</param>
+    /// <param name="threshold">Порог similarity, 0.1..1.0. Чем выше, тем строже.</param>
+    /// <param name="level">Опциональный фильтр по уровню (1=регион, 8=улица, ...).</param>
+    /// <param name="parentId">Опциональный OBJECTID родителя — ограничивает поиск его поддеревом.</param>
+    [HttpGet("search/full")]
+    [ProducesResponseType(typeof(AddressListResponse), StatusCodes.Status200OK)]
+    public async Task<ActionResult<AddressListResponse>> SearchFull(
+        [FromQuery] string q,
+        [FromQuery] int limit = 20,
+        [FromQuery] double threshold = 0.3,
+        [FromQuery] int? level = null,
+        [FromQuery] long? parentId = null,
+        CancellationToken ct = default)
+    {
+        var results = await search.SearchAddressesAsync(q, limit, threshold, level, parentId, ct);
+        return Ok(results);
+    }
+
     /// <summary>Дочерние элементы адм. деления, с фильтрами по уровню и наименованию + пагинацией.</summary>
     [HttpGet("{objectId:long}/children")]
     [ProducesResponseType(typeof(IReadOnlyList<AddressChildDto>), StatusCodes.Status200OK)]
@@ -80,45 +102,5 @@ public class AddressesController(
     {
         var parents = await search.GetParentsAsync(objectId, ct);
         return parents.Count == 0 ? NotFound() : Ok(parents);
-    }
-
-    /// <summary>Получить адреса пачкой по списку OBJECTID (до 1000 за запрос).</summary>
-    [HttpPost("batch")]
-    [ProducesResponseType(typeof(BatchAddressResponse), StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status400BadRequest)]
-    public async Task<ActionResult<BatchAddressResponse>> Batch(
-        [FromBody] BatchAddressRequest request, CancellationToken ct)
-    {
-        try
-        {
-            return Ok(await batch.ResolveAsync(request, ct));
-        }
-        catch (ArgumentException ex)
-        {
-            return Problem(ex.Message, statusCode: StatusCodes.Status400BadRequest);
-        }
-    }
-
-    /// <summary>Разобрать свободную адресную строку и предложить кандидатов из ГАР.</summary>
-    [HttpPost("parse")]
-    [ProducesResponseType(typeof(ParseResult), StatusCodes.Status200OK)]
-    public async Task<ActionResult<ParseResult>> Parse([FromBody] ParseRequest request, CancellationToken ct)
-        => Ok(await parser.ParseAsync(request, ct));
-
-    /// <summary>Разобрать список свободных адресных строк (до 1000).</summary>
-    [HttpPost("parse-batch")]
-    [ProducesResponseType(typeof(ParseBatchResult), StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status400BadRequest)]
-    public async Task<ActionResult<ParseBatchResult>> ParseBatch(
-        [FromBody] ParseBatchRequest request, CancellationToken ct)
-    {
-        try
-        {
-            return Ok(await parser.ParseBatchAsync(request, ct));
-        }
-        catch (ArgumentException ex)
-        {
-            return Problem(ex.Message, statusCode: StatusCodes.Status400BadRequest);
-        }
     }
 }

@@ -7,5 +7,5 @@ public class ReestrObject
     public int? LevelId { get; set; }
     public DateOnly? UpdateDate { get; set; }
     public DateOnly? CreateDate { get; set; }
-    public short? IsActive { get; set; }
+    public bool? IsActive { get; set; }
 }

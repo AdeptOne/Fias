@@ -44,4 +44,11 @@ internal static class XmlHelpers
         var v = r.GetAttribute(name);
         return string.IsNullOrEmpty(v) ? null : Guid.Parse(v);
     }
+
+    public static bool? GetBool(XmlReader r, string name)
+    {
+        var v = r.GetAttribute(name);
+        if (v == "1" || v?.ToLower() == "true") return true;
+        return false;
+    }
 }
