@@ -23,4 +23,18 @@ public interface IAddressSearchService
 
     /// <summary>Путь от объекта к корню (для breadcrumbs). Возвращает иерархию от корня к листу.</summary>
     Task<IReadOnlyList<AddressHierarchyItemDto>> GetParentsAsync(long objectId, CancellationToken ct);
+
+    /// <summary>Саджест адреса в формате, близком к DaData (value/unrestricted_value/data).</summary>
+    /// <param name="fromBound">Нижняя граница уровня: region|area|city|settlement|street|house.</param>
+    /// <param name="toBound">Верхняя граница уровня (тех же значений).</param>
+    /// <param name="regionCode">Ограничение области поиска кодом субъекта РФ.</param>
+    /// <param name="parentId">Ограничение поддеревом OBJECTID.</param>
+    Task<SuggestionsResponse> SuggestAsync(
+        string query, int count, string? fromBound, string? toBound, int? regionCode, long? parentId, CancellationToken ct);
+
+    /// <summary>Резолв одного объекта по FIAS GUID в формат саджеста.</summary>
+    Task<SuggestionDto?> SuggestByGuidAsync(Guid fiasId, CancellationToken ct);
+
+    /// <summary>Стандартизация: сырая строка → один лучший разобранный адрес + qc/confidence.</summary>
+    Task<CleanResultDto> CleanAsync(string query, CancellationToken ct);
 }

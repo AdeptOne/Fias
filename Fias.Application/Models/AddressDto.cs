@@ -98,3 +98,22 @@ public record AddressChildDto(
     Guid? ObjectGuid,
     int Level,
     string FullName);
+
+/// <summary>Элемент саджеста (формат, близкий к DaData): значение + структурный блок data.</summary>
+public record SuggestionDto(
+    [property: JsonPropertyName("value")] string Value,
+    [property: JsonPropertyName("unrestricted_value")] string UnrestrictedValue,
+    [property: JsonPropertyName("data")] AddressDataDto Data);
+
+/// <summary>Ответ саджеста: { "suggestions": [...] }.</summary>
+public record SuggestionsResponse(
+    [property: JsonPropertyName("suggestions")] IReadOnlyList<SuggestionDto> Suggestions);
+
+/// <summary>Результат стандартизации строки: лучший разбор + код качества и уверенность.</summary>
+public record CleanResultDto(
+    [property: JsonPropertyName("value"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Value,
+    [property: JsonPropertyName("unrestricted_value"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? UnrestrictedValue,
+    [property: JsonPropertyName("data"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] AddressDataDto? Data,
+    // qc: 0 — распознано до дома; 1 — до улицы/города; 2 — нечётко; 3 — не распознано.
+    [property: JsonPropertyName("qc")] int Qc,
+    [property: JsonPropertyName("confidence")] double Confidence);

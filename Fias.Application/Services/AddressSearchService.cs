@@ -50,37 +50,108 @@ public class AddressSearchService(
             "Поиск '{Query}' → {Count} рез. (город={City}, улица={Street}, дом={House})",
             clean, hits.Count, parsed.RegionOrCity, parsed.Street, parsed.House);
 
-        const int houseLevel = 10;
         var results = new List<AddressSearchResultDto>(hits.Count);
         foreach (var hit in hits)
         {
-            // full_name и реквизиты уже денормализованы в проекции search.* — билдер не нужен.
-            var fallback = string.Join(" ", new[] { hit.TypeName?.Trim(), hit.Name?.Trim() }
-                .Where(s => !string.IsNullOrEmpty(s)));
-            var full = string.IsNullOrWhiteSpace(hit.FullName) ? fallback : hit.FullName!;
-
-            var data = new AddressDataDto(
-                FiasId: hit.ObjectGuid,
-                FiasLevel: hit.Level,
-                RegionCode: hit.RegionCode,
-                Region: hit.Region,
-                Area: hit.Area,
-                City: hit.City,
-                Settlement: hit.Settlement,
-                Street: hit.Street,
-                House: hit.Level == houseLevel ? hit.Name?.Trim() : null,
-                PostalCode: hit.PostalCode,
-                KladrId: hit.KladrCode,
-                Okato: hit.Okato,
-                Oktmo: hit.Oktmo,
-                TaxOffice: hit.IfnsFl,
-                TaxOfficeLegal: hit.IfnsUl);
-
+            var full = FullText(hit);
             results.Add(new AddressSearchResultDto(
-                hit.ObjectId, hit.ObjectGuid, hit.Level, hit.Name?.Trim(), full, full, hit.Score, data));
+                hit.ObjectId, hit.ObjectGuid, hit.Level, hit.Name?.Trim(), full, full, hit.Score, ToData(hit)));
         }
         return results;
     }
+
+    private const int HouseLevel = 10;
+
+    /// <summary>Полная адресная строка из проекции (фолбэк — «тип имя»).</summary>
+    private static string FullText(Search.AddressResult hit)
+    {
+        if (!string.IsNullOrWhiteSpace(hit.FullName)) return hit.FullName!;
+        return string.Join(" ", new[] { hit.TypeName?.Trim(), hit.Name?.Trim() }
+            .Where(s => !string.IsNullOrEmpty(s)));
+    }
+
+    /// <summary>Денормализованный структурный блок (формат DaData) из строки результата.</summary>
+    private static AddressDataDto ToData(Search.AddressResult hit) => new(
+        FiasId: hit.ObjectGuid,
+        FiasLevel: hit.Level,
+        RegionCode: hit.RegionCode,
+        Region: hit.Region,
+        Area: hit.Area,
+        City: hit.City,
+        Settlement: hit.Settlement,
+        Street: hit.Street,
+        House: hit.Level == HouseLevel ? hit.Name?.Trim() : null,
+        PostalCode: hit.PostalCode,
+        KladrId: hit.KladrCode,
+        Okato: hit.Okato,
+        Oktmo: hit.Oktmo,
+        TaxOffice: hit.IfnsFl,
+        TaxOfficeLegal: hit.IfnsUl);
+
+    private static SuggestionDto ToSuggestion(Search.AddressResult hit)
+    {
+        var full = FullText(hit);
+        return new SuggestionDto(full, full, ToData(hit));
+    }
+
+    public async Task<SuggestionsResponse> SuggestAsync(
+        string query, int count, string? fromBound, string? toBound, int? regionCode, long? parentId, CancellationToken ct)
+    {
+        var clean = (query ?? string.Empty).Trim();
+        if (clean.Length < 2)
+            return new SuggestionsResponse(Array.Empty<SuggestionDto>());
+
+        var parsed = normalizer.Parse(clean) with
+        {
+            Limit = Math.Clamp(count, 1, 20),
+            LevelFrom = BoundToLevel(fromBound),
+            LevelTo = BoundToLevel(toBound),
+            RegionCode = regionCode,
+            ParentObjectId = parentId,
+        };
+
+        var hits = await searchRepository.SearchAsync(parsed, ct);
+        var items = new List<SuggestionDto>(hits.Count);
+        foreach (var hit in hits) items.Add(ToSuggestion(hit));
+        return new SuggestionsResponse(items);
+    }
+
+    public async Task<SuggestionDto?> SuggestByGuidAsync(Guid fiasId, CancellationToken ct)
+    {
+        var hit = await searchRepository.GetByGuidAsync(fiasId, ct);
+        return hit is null ? null : ToSuggestion(hit);
+    }
+
+    public async Task<CleanResultDto> CleanAsync(string query, CancellationToken ct)
+    {
+        var clean = (query ?? string.Empty).Trim();
+        if (clean.Length < 2)
+            return new CleanResultDto(null, null, null, Qc: 3, Confidence: 0);
+
+        var parsed = normalizer.Parse(clean) with { Limit = 1 };
+        var hits = await searchRepository.SearchAsync(parsed, ct);
+        var best = hits.Count > 0 ? hits[0] : null;
+        if (best is null)
+            return new CleanResultDto(null, null, null, Qc: 3, Confidence: 0);
+
+        // qc: 0 — до дома, 1 — до улицы/города, 2 — иначе (нечётко/верхний уровень).
+        var qc = best.Level switch { HouseLevel => 0, >= 5 and <= 8 => 1, _ => 2 };
+        var full = FullText(best);
+        return new CleanResultDto(full, full, ToData(best), qc, Math.Clamp(best.Score, 0, 1));
+    }
+
+    /// <summary>Имя границы DaData → уровень ГАР (приближённо; правьте под object_levels).</summary>
+    private static int? BoundToLevel(string? bound) => bound?.Trim().ToLowerInvariant() switch
+    {
+        "region" => 1,
+        "area" => 2,
+        "city" => 5,
+        "settlement" => 6,
+        "street" => 8,
+        "house" => 10,
+        "flat" => 11,
+        _ => null,
+    };
 
     /// <summary>Резолвит OBJECTID по OBJECTGUID среди всех типов объектов (адрес/дом/квартира/комната).</summary>
     private async Task<long?> ResolveObjectIdByGuidAsync(Guid guid, CancellationToken ct)

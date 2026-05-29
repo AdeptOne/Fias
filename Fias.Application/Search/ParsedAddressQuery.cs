@@ -45,8 +45,17 @@ public sealed record ParsedAddressQuery
     /// <summary>Порог pg_trgm similarity для триграммного фолбэка (0.1..1.0).</summary>
     public double SimilarityThreshold { get; init; } = 0.3;
 
-    /// <summary>Опциональный фильтр по уровню адресообразующего элемента.</summary>
+    /// <summary>Опциональный фильтр по точному уровню (legacy /search). Имеет приоритет над диапазоном.</summary>
     public int? LevelFilter { get; init; }
+
+    /// <summary>Нижняя граница уровня (broad, напр. город) — из from_bound саджеста.</summary>
+    public int? LevelFrom { get; init; }
+
+    /// <summary>Верхняя граница уровня (narrow, напр. улица) — из to_bound саджеста.</summary>
+    public int? LevelTo { get; init; }
+
+    /// <summary>Ограничение области поиска кодом субъекта РФ (locations у DaData).</summary>
+    public int? RegionCode { get; init; }
 
     /// <summary>Опциональное ограничение поиска поддеревом заданного OBJECTID.</summary>
     public long? ParentObjectId { get; init; }

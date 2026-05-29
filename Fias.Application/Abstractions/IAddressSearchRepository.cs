@@ -15,4 +15,7 @@ public interface IAddressSearchRepository
     /// поддереве, чтобы не сканировать всю базу ГАР.
     /// </summary>
     Task<IReadOnlyList<AddressResult>> SearchAsync(ParsedAddressQuery query, CancellationToken ct);
+
+    /// <summary>Прямой резолв объекта по FIAS GUID из проекции (адресообразующий объект или дом).</summary>
+    Task<AddressResult?> GetByGuidAsync(Guid guid, CancellationToken ct);
 }
