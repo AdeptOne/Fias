@@ -13,6 +13,10 @@ public interface IAddressSearchService
     Task<IReadOnlyList<AddressSearchResultDto>> SearchAsync(
         string query, int limit, double threshold, int? level, long? parentId, CancellationToken ct);
 
+    /// <summary>Поиск с полной структурой ГАР по каждому найденному объекту: { "addresses": [...] }.</summary>
+    Task<AddressListResponse> SearchAddressesAsync(
+        string query, int limit, double threshold, int? level, long? parentId, CancellationToken ct);
+
     /// <summary>Дочерние элементы по OBJECTID родителя (адм. деление), опционально по уровню.</summary>
     Task<IReadOnlyList<AddressChildDto>> GetChildrenAsync(
         long objectId, int? level, string? nameFilter, int page, int pageSize, CancellationToken ct);

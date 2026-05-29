@@ -32,7 +32,7 @@ public class ReestrObjectImporter(
         await WriteNullable(w, XmlHelpers.GetInt(r, "LEVELID"), NpgsqlDbType.Integer, ct);
         await WriteNullable(w, XmlHelpers.GetDate(r, "UPDATEDATE"), NpgsqlDbType.Date, ct);
         await WriteNullable(w, XmlHelpers.GetDate(r, "CREATEDATE"), NpgsqlDbType.Date, ct);
-        await WriteNullable(w, XmlHelpers.GetShort(r, "ISACTIVE"), NpgsqlDbType.Smallint, ct);
+        await WriteNullable(w, XmlHelpers.GetBool(r, "ISACTIVE"), NpgsqlDbType.Boolean, ct);
     }
 
     protected override string BuildUpsertFromStagingSql(string staging) => $"""

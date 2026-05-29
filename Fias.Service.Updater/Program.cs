@@ -20,13 +20,18 @@ builder.Services.AddHangfire(cfg =>
     cfg.SetDataCompatibilityLevel(CompatibilityLevel.Version_180);
     cfg.UseSimpleAssemblyNameTypeSerializer();
     cfg.UseRecommendedSerializerSettings();
-    cfg.UsePostgreSqlStorage(opt =>
-    {
-        opt.UseNpgsqlConnection(builder.Configuration.GetConnectionString("Default"));
-    });
+    cfg.UsePostgreSqlStorage(
+        opt => opt.UseNpgsqlConnection(builder.Configuration.GetConnectionString("Default")),
+        new PostgreSqlStorageOptions
+        {
+            // Полный импорт ФИАС идёт дольше дефолтного invisibility timeout (30 мин),
+            // из-за чего Hangfire считал джобу брошенной и повторно её запускал.
+            // Sliding-режим заставляет воркер слать heartbeat, пока джоба выполняется,
+            // поэтому работающий импорт не перезабирается. Таймаут — страховка сверху.
+            UseSlidingInvisibilityTimeout = true,
+            InvisibilityTimeout = TimeSpan.FromHours(6),
+        });
 });
-
-builder.Services.AddHangfireServer(opt => opt.WorkerCount = 2);
 
 builder.Services.AddHangfireServer(opt =>
 {
@@ -56,7 +61,12 @@ builder.Services.AddSingleton<IFiasEntityImporter, HouseTypeImporter>();
 builder.Services.AddSingleton<IFiasEntityImporter, ApartmentTypeImporter>();
 builder.Services.AddSingleton<IFiasEntityImporter, RoomTypeImporter>();
 builder.Services.AddSingleton<IFiasEntityImporter, ObjectLevelImporter>();
-builder.Services.AddSingleton<IFiasEntityImporter, ParamImporter>();
+builder.Services.AddSingleton<IFiasEntityImporter, AddrObjParamImporter>();
+builder.Services.AddSingleton<IFiasEntityImporter, HousesParamImporter>();
+builder.Services.AddSingleton<IFiasEntityImporter, ApartmentsParamImporter>();
+builder.Services.AddSingleton<IFiasEntityImporter, RoomsParamImporter>();
+builder.Services.AddSingleton<IFiasEntityImporter, SteadsParamImporter>();
+builder.Services.AddSingleton<IFiasEntityImporter, CarplacesParamImporter>();
 builder.Services.AddSingleton<IFiasEntityImporterRegistry, FiasEntityImporterRegistry>();
 
 builder.Services.AddHttpClient<IFiasFnsClient, FiasFnsClient>(c =>

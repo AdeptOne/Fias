@@ -11,7 +11,8 @@ public class House
     public int? HouseType { get; set; }
     public int? AddType1 { get; set; }
     public int? AddType2 { get; set; }
+    public int? OperTypeId { get; set; }
     public DateOnly? EndDate { get; set; }
-    public short? IsActual { get; set; }
-    public short? IsActive { get; set; }
+    public bool? IsActual { get; set; }
+    public bool? IsActive { get; set; }
 }

@@ -43,8 +43,8 @@ public class HouseImporter(
         await WriteNullable(w, XmlHelpers.GetDate(r, "UPDATEDATE"), NpgsqlDbType.Date, ct);
         await WriteNullable(w, XmlHelpers.GetDate(r, "STARTDATE"), NpgsqlDbType.Date, ct);
         await WriteNullable(w, XmlHelpers.GetDate(r, "ENDDATE"), NpgsqlDbType.Date, ct);
-        await WriteNullable(w, XmlHelpers.GetShort(r, "ISACTUAL"), NpgsqlDbType.Smallint, ct);
-        await WriteNullable(w, XmlHelpers.GetShort(r, "ISACTIVE"), NpgsqlDbType.Smallint, ct);
+        await WriteNullable(w, XmlHelpers.GetBool(r, "ISACTUAL"), NpgsqlDbType.Boolean, ct);
+        await WriteNullable(w, XmlHelpers.GetBool(r, "ISACTIVE"), NpgsqlDbType.Boolean, ct);
     }
 
     protected override string BuildUpsertFromStagingSql(string staging) => $"""

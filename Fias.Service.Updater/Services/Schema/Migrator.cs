@@ -72,7 +72,7 @@ public class Migrator(INpgsqlConnectionFactory factory, ILogger<Migrator> logger
             levelid     integer,
             updatedate  date,
             createdate  date,
-            isactive    smallint
+            isactive    boolean
         );
 
         CREATE TABLE IF NOT EXISTS fias.addressobjects (
@@ -88,15 +88,15 @@ public class Migrator(INpgsqlConnectionFactory factory, ILogger<Migrator> logger
             updatedate  date,
             startdate   date,
             enddate     date,
-            isactual    smallint,
-            isactive    smallint
+            isactual    boolean,
+            isactive    boolean
         );
         CREATE INDEX IF NOT EXISTS ix_addressobjects_objectid ON fias.addressobjects(objectid);
         CREATE INDEX IF NOT EXISTS ix_addressobjects_name_trgm
             ON fias.addressobjects USING gin (name gin_trgm_ops)
-            WHERE isactive = 1 AND isactual = 1;
+            WHERE isactive = true AND isactual = true;
         CREATE INDEX IF NOT EXISTS ix_addressobjects_objectguid ON fias.addressobjects(objectguid)
-            WHERE isactive = 1 AND isactual = 1;
+            WHERE isactive = true AND isactual = true;
 
         CREATE TABLE IF NOT EXISTS fias.houses (
             id          bigint PRIMARY KEY,
@@ -114,8 +114,8 @@ public class Migrator(INpgsqlConnectionFactory factory, ILogger<Migrator> logger
             updatedate  date,
             startdate   date,
             enddate     date,
-            isactual    smallint,
-            isactive    smallint
+            isactual    boolean,
+            isactive    boolean
         );
         CREATE INDEX IF NOT EXISTS ix_houses_objectid ON fias.houses(objectid);
 
@@ -131,8 +131,8 @@ public class Migrator(INpgsqlConnectionFactory factory, ILogger<Migrator> logger
             updatedate  date,
             startdate   date,
             enddate     date,
-            isactual    smallint,
-            isactive    smallint
+            isactual    boolean,
+            isactive    boolean
         );
         CREATE INDEX IF NOT EXISTS ix_apartments_objectid ON fias.apartments(objectid);
 
@@ -148,8 +148,8 @@ public class Migrator(INpgsqlConnectionFactory factory, ILogger<Migrator> logger
             updatedate  date,
             startdate   date,
             enddate     date,
-            isactual    smallint,
-            isactive    smallint
+            isactual    boolean,
+            isactive    boolean
         );
         CREATE INDEX IF NOT EXISTS ix_rooms_objectid ON fias.rooms(objectid);
 
@@ -161,7 +161,7 @@ public class Migrator(INpgsqlConnectionFactory factory, ILogger<Migrator> logger
             updatedate  date,
             startdate   date,
             enddate     date,
-            isactive    smallint
+            isactive    boolean
         );
         CREATE INDEX IF NOT EXISTS ix_mun_hierarchy_objectid ON fias.mun_hierarchy(objectid);
 
@@ -173,11 +173,11 @@ public class Migrator(INpgsqlConnectionFactory factory, ILogger<Migrator> logger
             updatedate  date,
             startdate   date,
             enddate     date,
-            isactive    smallint
+            isactive    boolean
         );
         CREATE INDEX IF NOT EXISTS ix_adm_hierarchy_objectid ON fias.adm_hierarchy(objectid);
         CREATE INDEX IF NOT EXISTS ix_adm_hierarchy_parentobjid ON fias.adm_hierarchy(parentobjid)
-            WHERE isactive = 1;
+            WHERE isactive = true;
 
         CREATE TABLE IF NOT EXISTS fias.addressobject_types (
             id          integer PRIMARY KEY,
@@ -187,7 +187,7 @@ public class Migrator(INpgsqlConnectionFactory factory, ILogger<Migrator> logger
             startdate   date,
             enddate     date,
             updatedate  date,
-            isactive    smallint
+            isactive    boolean
         );
 
         CREATE TABLE IF NOT EXISTS fias.house_types (
@@ -197,7 +197,7 @@ public class Migrator(INpgsqlConnectionFactory factory, ILogger<Migrator> logger
             startdate   date,
             enddate     date,
             updatedate  date,
-            isactive    smallint
+            isactive    boolean
         );
 
         CREATE TABLE IF NOT EXISTS fias.apartment_types (
@@ -207,7 +207,7 @@ public class Migrator(INpgsqlConnectionFactory factory, ILogger<Migrator> logger
             startdate   date,
             enddate     date,
             updatedate  date,
-            isactive    smallint
+            isactive    boolean
         );
 
         CREATE TABLE IF NOT EXISTS fias.room_types (
@@ -217,7 +217,7 @@ public class Migrator(INpgsqlConnectionFactory factory, ILogger<Migrator> logger
             startdate   date,
             enddate     date,
             updatedate  date,
-            isactive    smallint
+            isactive    boolean
         );
 
         CREATE TABLE IF NOT EXISTS fias.object_levels (
@@ -227,20 +227,35 @@ public class Migrator(INpgsqlConnectionFactory factory, ILogger<Migrator> logger
             startdate   date,
             enddate     date,
             updatedate  date,
-            isactive    smallint
+            isactive    boolean
         );
 
-        CREATE TABLE IF NOT EXISTS fias.params (
-            id          bigint PRIMARY KEY,
-            objectid    bigint NOT NULL,
-            changeid    bigint,
-            changeidend bigint,
-            typeid      integer,
-            value       text,
-            updatedate  date,
-            startdate   date,
-            enddate     date
-        );
-        CREATE INDEX IF NOT EXISTS ix_params_objectid_typeid ON fias.params(objectid, typeid);
+        -- В fias.params сваливаются параметры всех семейств (addr_obj/houses/apartments/...),
+        -- а их XML-овый ID уникален лишь внутри своего семейства и пересекается между ними.
+        -- Поэтому ключ составной: (objtype, id). objtype — дискриминатор семейства.
+        -- Идемпотентная разовая миграция: если таблица старой формы (без objtype) — пересоздаём.
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'fias' AND table_name = 'params' AND column_name = 'objtype')
+            THEN
+                DROP TABLE IF EXISTS fias.params;
+                CREATE TABLE fias.params (
+                    objtype     smallint NOT NULL,
+                    id          bigint   NOT NULL,
+                    objectid    bigint   NOT NULL,
+                    changeid    bigint,
+                    changeidend bigint,
+                    typeid      integer,
+                    value       text,
+                    updatedate  date,
+                    startdate   date,
+                    enddate     date,
+                    PRIMARY KEY (objtype, id)
+                );
+                CREATE INDEX ix_params_objectid_typeid ON fias.params(objectid, typeid);
+            END IF;
+        END $$;
         """;
 }

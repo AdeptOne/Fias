@@ -7,5 +7,5 @@ public class AdmHierarchy
     public long? ParentObjId { get; set; }
     public string? Path { get; set; }
     public DateOnly? EndDate { get; set; }
-    public short? IsActive { get; set; }
+    public bool? IsActive { get; set; }
 }

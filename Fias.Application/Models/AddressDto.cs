@@ -1,23 +1,67 @@
+using System.Text.Json.Serialization;
+
 namespace Fias.Application.Models;
 
-/// <summary>Один уровень иерархии в адресной строке.</summary>
+/// <summary>Один уровень иерархии в адресной строке (формат ГАР).</summary>
 public record AddressHierarchyItemDto(
-    long ObjectId,
-    Guid? ObjectGuid,
-    int Level,
-    string? Type,
-    string? ShortType,
-    string? Name,
-    string FullName);
+    [property: JsonPropertyName("object_type")] string ObjectType,
+    [property: JsonPropertyName("object_id")] long ObjectId,
+    [property: JsonPropertyName("object_level_id")] int ObjectLevelId,
+    [property: JsonPropertyName("object_guid")] Guid? ObjectGuid,
+    [property: JsonPropertyName("full_name")] string FullName,
+    [property: JsonPropertyName("full_name_short")] string FullNameShort,
+    [property: JsonPropertyName("hierarchy_place")] int HierarchyPlace,
+    [property: JsonPropertyName("type_name"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? TypeName = null,
+    [property: JsonPropertyName("type_short_name"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? TypeShortName = null,
+    [property: JsonPropertyName("type_form_code"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? TypeFormCode = null,
+    [property: JsonPropertyName("name"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Name = null,
+    [property: JsonPropertyName("region_code"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? RegionCode = null,
+    [property: JsonPropertyName("kladr_code"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? KladrCode = null,
+    // Поля дома (object_type = "house").
+    [property: JsonPropertyName("number"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Number = null,
+    [property: JsonPropertyName("add_number1"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? AddNumber1 = null,
+    [property: JsonPropertyName("add_type1_name"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? AddType1Name = null,
+    [property: JsonPropertyName("add_type1_short_name"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? AddType1ShortName = null,
+    [property: JsonPropertyName("add_number2"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? AddNumber2 = null,
+    [property: JsonPropertyName("add_type2_name"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? AddType2Name = null,
+    [property: JsonPropertyName("add_type2_short_name"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? AddType2ShortName = null);
 
-/// <summary>Полный ответ для одного объекта адресации.</summary>
+/// <summary>Дополнительные коды объекта адресации (из PARAM).</summary>
+public record AddressDetailsDto(
+    [property: JsonPropertyName("postal_code"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? PostalCode = null,
+    [property: JsonPropertyName("ifns_ul"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? IfnsUl = null,
+    [property: JsonPropertyName("ifns_fl"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? IfnsFl = null,
+    [property: JsonPropertyName("okato"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Okato = null,
+    [property: JsonPropertyName("oktmo"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Oktmo = null,
+    [property: JsonPropertyName("cadastral_number"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? CadastralNumber = null,
+    [property: JsonPropertyName("oktmo_budget"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? OktmoBudget = null);
+
+/// <summary>Федеральный округ (статический справочник, в данных ФИАС отсутствует).</summary>
+public record FederalDistrictDto(
+    [property: JsonPropertyName("id")] int Id,
+    [property: JsonPropertyName("full_name")] string FullName,
+    [property: JsonPropertyName("short_name")] string ShortName,
+    [property: JsonPropertyName("center_id"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] long? CenterId = null);
+
+/// <summary>Полный ответ для одного объекта адресации (формат ГАР).</summary>
 public record AddressDto(
-    long ObjectId,
-    Guid? ObjectGuid,
-    int Level,
-    string Address,
-    string ShortAddress,
-    IReadOnlyList<AddressHierarchyItemDto> Hierarchy);
+    [property: JsonPropertyName("object_id")] long ObjectId,
+    [property: JsonPropertyName("object_level_id")] int ObjectLevelId,
+    [property: JsonPropertyName("operation_type_id"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? OperationTypeId,
+    [property: JsonPropertyName("object_guid")] Guid? ObjectGuid,
+    [property: JsonPropertyName("address_type")] int AddressType,
+    [property: JsonPropertyName("full_name")] string FullName,
+    [property: JsonPropertyName("region_code"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? RegionCode,
+    [property: JsonPropertyName("is_active")] bool IsActive,
+    [property: JsonPropertyName("path"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Path,
+    [property: JsonPropertyName("address_details"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] AddressDetailsDto? AddressDetails,
+    [property: JsonPropertyName("hierarchy")] IReadOnlyList<AddressHierarchyItemDto> Hierarchy,
+    [property: JsonPropertyName("federal_district"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] FederalDistrictDto? FederalDistrict,
+    [property: JsonPropertyName("hierarchy_place")] int HierarchyPlace);
+
+/// <summary>Обёртка-ответ со списком адресов: { "addresses": [...] }.</summary>
+public record AddressListResponse(
+    [property: JsonPropertyName("addresses")] IReadOnlyList<AddressDto> Addresses);
 
 /// <summary>Запись в результате поиска.</summary>
 public record AddressSearchResultDto(

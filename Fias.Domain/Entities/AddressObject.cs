@@ -14,6 +14,6 @@ public class AddressObject
     public DateOnly? UpdateDate { get; set; }
     public DateOnly? StartDate { get; set; }
     public DateOnly? EndDate { get; set; }
-    public short? IsActual { get; set; }
-    public short? IsActive { get; set; }
+    public bool? IsActual { get; set; }
+    public bool? IsActive { get; set; }
 }

@@ -15,12 +15,12 @@ public class HierarchyService(IFiasDbContext db) : IHierarchyService
     public async Task<IReadOnlyList<RegionDto>> GetRegionsAsync(CancellationToken ct)
     {
         var regionReestrIds = await db.ReestrObjects.AsNoTracking()
-            .Where(r => r.LevelId == LevelRegion && r.IsActive == 1)
+            .Where(r => r.LevelId == LevelRegion && r.IsActive == true)
             .Select(r => r.ObjectId)
             .ToListAsync(ct);
 
         var regions = await db.AddressObjects.AsNoTracking()
-            .Where(a => a.Level == LevelRegion && a.IsActual == 1 && a.IsActive == 1
+            .Where(a => a.Level == LevelRegion && a.IsActual == true && a.IsActive == true
                         && regionReestrIds.Contains(a.ObjectId))
             .Select(a => new { a.ObjectId, a.ObjectGuid, a.Name, a.TypeName })
             .ToListAsync(ct);
@@ -58,7 +58,7 @@ public class HierarchyService(IFiasDbContext db) : IHierarchyService
             return new PagedResult<HouseSummaryDto>(Array.Empty<HouseSummaryDto>(), 0, page, pageSize);
 
         var houses = await db.Houses.AsNoTracking()
-            .Where(h => childIds.Contains(h.ObjectId) && h.IsActual == 1 && h.IsActive == 1)
+            .Where(h => childIds.Contains(h.ObjectId) && h.IsActual == true && h.IsActive == true)
             .ToListAsync(ct);
 
         if (!string.IsNullOrWhiteSpace(numFilter))
@@ -70,7 +70,7 @@ public class HierarchyService(IFiasDbContext db) : IHierarchyService
         }
 
         var houseTypes = await db.HouseTypes.AsNoTracking()
-            .Where(t => t.IsActive == 1)
+            .Where(t => t.IsActive == true)
             .ToDictionaryAsync(t => t.Id, t => t.ShortName?.Trim() ?? string.Empty, ct);
 
         var ordered = houses
@@ -102,7 +102,7 @@ public class HierarchyService(IFiasDbContext db) : IHierarchyService
             return new PagedResult<ApartmentSummaryDto>(Array.Empty<ApartmentSummaryDto>(), 0, page, pageSize);
 
         var apartments = await db.Apartments.AsNoTracking()
-            .Where(a => childIds.Contains(a.ObjectId) && a.IsActual == 1 && a.IsActive == 1)
+            .Where(a => childIds.Contains(a.ObjectId) && a.IsActual == true && a.IsActive == true)
             .ToListAsync(ct);
 
         if (!string.IsNullOrWhiteSpace(numFilter))
@@ -114,7 +114,7 @@ public class HierarchyService(IFiasDbContext db) : IHierarchyService
         }
 
         var apartmentTypes = await db.ApartmentTypes.AsNoTracking()
-            .Where(t => t.IsActive == 1)
+            .Where(t => t.IsActive == true)
             .ToDictionaryAsync(t => t.Id, t => t.ShortName?.Trim() ?? string.Empty, ct);
 
         var ordered = apartments.OrderBy(a => a.Number, NaturalStringComparer.Instance).ToList();
@@ -143,11 +143,11 @@ public class HierarchyService(IFiasDbContext db) : IHierarchyService
             return new PagedResult<RoomSummaryDto>(Array.Empty<RoomSummaryDto>(), 0, page, pageSize);
 
         var rooms = await db.Rooms.AsNoTracking()
-            .Where(r => childIds.Contains(r.ObjectId) && r.IsActual == 1 && r.IsActive == 1)
+            .Where(r => childIds.Contains(r.ObjectId) && r.IsActual == true && r.IsActive == true)
             .ToListAsync(ct);
 
         var roomTypes = await db.RoomTypes.AsNoTracking()
-            .Where(t => t.IsActive == 1)
+            .Where(t => t.IsActive == true)
             .ToDictionaryAsync(t => t.Id, t => t.ShortName?.Trim() ?? string.Empty, ct);
 
         var ordered = rooms.OrderBy(r => r.Number, NaturalStringComparer.Instance).ToList();
@@ -168,14 +168,14 @@ public class HierarchyService(IFiasDbContext db) : IHierarchyService
     private async Task<List<long>> ChildObjectIdsAsync(long parentObjectId, int childLevel, CancellationToken ct)
     {
         var ids = await db.AdmHierarchy.AsNoTracking()
-            .Where(h => h.ParentObjId == parentObjectId && h.IsActive == 1)
+            .Where(h => h.ParentObjId == parentObjectId && h.IsActive == true)
             .Select(h => h.ObjectId)
             .ToListAsync(ct);
         if (ids.Count == 0) return ids;
 
         // Фильтр по уровню для надёжности (на случай, если в иерархии встречаются разные).
         return await db.ReestrObjects.AsNoTracking()
-            .Where(r => ids.Contains(r.ObjectId) && r.LevelId == childLevel && r.IsActive == 1)
+            .Where(r => ids.Contains(r.ObjectId) && r.LevelId == childLevel && r.IsActive == true)
             .Select(r => r.ObjectId)
             .ToListAsync(ct);
     }
