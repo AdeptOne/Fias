@@ -13,26 +13,26 @@ public class TypesController(IReferencesService refs) : ControllerBase
 {
     /// <summary>Типы адресообразующих элементов; опциональный фильтр по уровню.</summary>
     [HttpGet("address-objects")]
-    [ProducesResponseType(typeof(IReadOnlyList<TypeDto>), StatusCodes.Status200OK)]
-    public async Task<ActionResult<IReadOnlyList<TypeDto>>> AddressObjects(
+    [ProducesResponseType(typeof(ListResponse<TypeDto>), StatusCodes.Status200OK)]
+    public async Task<ActionResult<ListResponse<TypeDto>>> AddressObjects(
         [FromQuery] int? level = null, CancellationToken ct = default)
-        => Ok(await refs.GetAddressObjectTypesAsync(level, ct));
+        => Ok(new ListResponse<TypeDto>(await refs.GetAddressObjectTypesAsync(level, ct)));
 
     /// <summary>Типы зданий (д., стр., корп.).</summary>
     [HttpGet("houses")]
-    [ProducesResponseType(typeof(IReadOnlyList<TypeDto>), StatusCodes.Status200OK)]
-    public async Task<ActionResult<IReadOnlyList<TypeDto>>> Houses(CancellationToken ct)
-        => Ok(await refs.GetHouseTypesAsync(ct));
+    [ProducesResponseType(typeof(ListResponse<TypeDto>), StatusCodes.Status200OK)]
+    public async Task<ActionResult<ListResponse<TypeDto>>> Houses(CancellationToken ct)
+        => Ok(new ListResponse<TypeDto>(await refs.GetHouseTypesAsync(ct)));
 
     /// <summary>Типы помещений (кв., оф., пом.).</summary>
     [HttpGet("apartments")]
-    [ProducesResponseType(typeof(IReadOnlyList<TypeDto>), StatusCodes.Status200OK)]
-    public async Task<ActionResult<IReadOnlyList<TypeDto>>> Apartments(CancellationToken ct)
-        => Ok(await refs.GetApartmentTypesAsync(ct));
+    [ProducesResponseType(typeof(ListResponse<TypeDto>), StatusCodes.Status200OK)]
+    public async Task<ActionResult<ListResponse<TypeDto>>> Apartments(CancellationToken ct)
+        => Ok(new ListResponse<TypeDto>(await refs.GetApartmentTypesAsync(ct)));
 
     /// <summary>Типы комнат внутри помещения.</summary>
     [HttpGet("rooms")]
-    [ProducesResponseType(typeof(IReadOnlyList<TypeDto>), StatusCodes.Status200OK)]
-    public async Task<ActionResult<IReadOnlyList<TypeDto>>> Rooms(CancellationToken ct)
-        => Ok(await refs.GetRoomTypesAsync(ct));
+    [ProducesResponseType(typeof(ListResponse<TypeDto>), StatusCodes.Status200OK)]
+    public async Task<ActionResult<ListResponse<TypeDto>>> Rooms(CancellationToken ct)
+        => Ok(new ListResponse<TypeDto>(await refs.GetRoomTypesAsync(ct)));
 }

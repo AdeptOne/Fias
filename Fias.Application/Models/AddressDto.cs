@@ -59,11 +59,25 @@ public record AddressDto(
     [property: JsonPropertyName("federal_district"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] FederalDistrictDto? FederalDistrict,
     [property: JsonPropertyName("hierarchy_place")] int HierarchyPlace);
 
-/// <summary>Обёртка-ответ со списком адресов: { "addresses": [...] }.</summary>
-public record AddressListResponse(
-    [property: JsonPropertyName("addresses")] IReadOnlyList<AddressDto> Addresses);
+/// <summary>Структурированные данные адреса для инлайн-выдачи (формат, близкий к DaData).</summary>
+public record AddressDataDto(
+    [property: JsonPropertyName("fias_id")] Guid? FiasId,
+    [property: JsonPropertyName("fias_level"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? FiasLevel,
+    [property: JsonPropertyName("region_code"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? RegionCode,
+    [property: JsonPropertyName("region"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Region,
+    [property: JsonPropertyName("area"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Area,
+    [property: JsonPropertyName("city"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? City,
+    [property: JsonPropertyName("settlement"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Settlement,
+    [property: JsonPropertyName("street"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Street,
+    [property: JsonPropertyName("house"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? House,
+    [property: JsonPropertyName("postal_code"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? PostalCode,
+    [property: JsonPropertyName("kladr_id"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? KladrId,
+    [property: JsonPropertyName("okato"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Okato,
+    [property: JsonPropertyName("oktmo"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Oktmo,
+    [property: JsonPropertyName("tax_office"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? TaxOffice,        // ИФНС ФЛ
+    [property: JsonPropertyName("tax_office_legal"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? TaxOfficeLegal); // ИФНС ЮЛ
 
-/// <summary>Запись в результате поиска.</summary>
+/// <summary>Запись в результате поиска. <see cref="Data"/> — структурный разбор в стиле DaData.</summary>
 public record AddressSearchResultDto(
     long ObjectId,
     Guid? ObjectGuid,
@@ -71,7 +85,8 @@ public record AddressSearchResultDto(
     string? Name,
     string FullName,
     string Address,
-    double Similarity);
+    double Similarity,
+    [property: JsonPropertyName("data"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] AddressDataDto? Data = null);
 
 /// <summary>Дочерний элемент иерархии.</summary>
 public record AddressChildDto(
@@ -79,3 +94,18 @@ public record AddressChildDto(
     Guid? ObjectGuid,
     int Level,
     string FullName);
+
+/// <summary>Элемент саджеста (формат, близкий к DaData): значение + структурный блок data.</summary>
+public record SuggestionDto(
+    [property: JsonPropertyName("value")] string Value,
+    [property: JsonPropertyName("unrestricted_value")] string UnrestrictedValue,
+    [property: JsonPropertyName("data")] AddressDataDto Data);
+
+/// <summary>Результат стандартизации строки: лучший разбор + код качества и уверенность.</summary>
+public record CleanResultDto(
+    [property: JsonPropertyName("value"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Value,
+    [property: JsonPropertyName("unrestricted_value"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? UnrestrictedValue,
+    [property: JsonPropertyName("data"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] AddressDataDto? Data,
+    // qc: 0 — распознано до дома; 1 — до улицы/города; 2 — нечётко; 3 — не распознано.
+    [property: JsonPropertyName("qc")] int Qc,
+    [property: JsonPropertyName("confidence")] double Confidence);

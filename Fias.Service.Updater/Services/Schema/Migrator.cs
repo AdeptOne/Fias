@@ -7,6 +7,12 @@ public interface IMigrator
 {
     Task EnsureSchemaAsync(CancellationToken ct);
     Task TruncateAllAsync(CancellationToken ct);
+
+    /// <summary>Снять вторичные индексы fias.* (перед массовой заливкой full-импорта).</summary>
+    Task DropSecondaryIndexesAsync(CancellationToken ct);
+
+    /// <summary>Построить вторичные индексы fias.* (параллельно) и обновить статистику.</summary>
+    Task RebuildSecondaryIndexesAsync(int parallelism, CancellationToken ct);
 }
 
 public class Migrator(INpgsqlConnectionFactory factory, ILogger<Migrator> logger) : IMigrator
@@ -33,10 +39,52 @@ public class Migrator(INpgsqlConnectionFactory factory, ILogger<Migrator> logger
         logger.LogInformation("Применяем схему fias.*");
 
         await using var conn = await factory.OpenAsync(ct);
-        await using var cmd = new NpgsqlCommand(Ddl, conn);
+        // Таблицы/PK + вторичные индексы (idempotent). На full-импорте индексы потом снимаются
+        // и пересобираются вокруг COPY, но для свежей БД и для delta они должны существовать.
+        await using var cmd = new NpgsqlCommand(Ddl + "\n" + SecondaryIndexesBatch, conn) { CommandTimeout = 0 };
         await cmd.ExecuteNonQueryAsync(ct);
 
         logger.LogInformation("Схема актуальна");
+    }
+
+    public async Task DropSecondaryIndexesAsync(CancellationToken ct)
+    {
+        logger.LogInformation("Снимаем вторичные индексы fias.* перед заливкой");
+        await using var conn = await factory.OpenAsync(ct);
+        await using var cmd = new NpgsqlCommand(DropFiasSecondaryIndexesDdl, conn) { CommandTimeout = 0 };
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task RebuildSecondaryIndexesAsync(int parallelism, CancellationToken ct)
+    {
+        // Каждый CREATE INDEX — на своём соединении, чтобы GIN (однопоточный) строился
+        // одновременно с btree на других таблицах. Степень ограничиваем: каждый build берёт
+        // до maintenance_work_mem, поэтому degree×maintenance_work_mem не должно превышать ОЗУ.
+        var degree = Math.Clamp(parallelism, 1, SecondaryIndexStatements.Length);
+        logger.LogInformation("Строим {Count} вторичных индексов fias.*, параллелизм {Degree}",
+            SecondaryIndexStatements.Length, degree);
+
+        using var gate = new SemaphoreSlim(degree);
+        var tasks = SecondaryIndexStatements.Select(async statement =>
+        {
+            await gate.WaitAsync(ct);
+            try
+            {
+                await using var conn = await factory.OpenAsync(ct);
+                await using var cmd = new NpgsqlCommand(statement, conn) { CommandTimeout = 0 };
+                await cmd.ExecuteNonQueryAsync(ct);
+            }
+            finally
+            {
+                gate.Release();
+            }
+        });
+        await Task.WhenAll(tasks);
+
+        logger.LogInformation("Обновляем статистику fias.*");
+        await using var analyzeConn = await factory.OpenAsync(ct);
+        await using var analyzeCmd = new NpgsqlCommand(AnalyzeDdl, analyzeConn) { CommandTimeout = 0 };
+        await analyzeCmd.ExecuteNonQueryAsync(ct);
     }
 
     public async Task TruncateAllAsync(CancellationToken ct)
@@ -91,12 +139,8 @@ public class Migrator(INpgsqlConnectionFactory factory, ILogger<Migrator> logger
             isactual    boolean,
             isactive    boolean
         );
-        CREATE INDEX IF NOT EXISTS ix_addressobjects_objectid ON fias.addressobjects(objectid);
-        CREATE INDEX IF NOT EXISTS ix_addressobjects_name_trgm
-            ON fias.addressobjects USING gin (name gin_trgm_ops)
-            WHERE isactive = true AND isactual = true;
-        CREATE INDEX IF NOT EXISTS ix_addressobjects_objectguid ON fias.addressobjects(objectguid)
-            WHERE isactive = true AND isactual = true;
+        -- Вторичные индексы fias.* создаются ОТДЕЛЬНО (FiasSecondaryIndexesDdl): на full-импорте
+        -- их снимают перед COPY и строят после — это кратно быстрее, чем поддерживать на вставке.
 
         CREATE TABLE IF NOT EXISTS fias.houses (
             id          bigint PRIMARY KEY,
@@ -117,8 +161,6 @@ public class Migrator(INpgsqlConnectionFactory factory, ILogger<Migrator> logger
             isactual    boolean,
             isactive    boolean
         );
-        CREATE INDEX IF NOT EXISTS ix_houses_objectid ON fias.houses(objectid);
-
         CREATE TABLE IF NOT EXISTS fias.apartments (
             id          bigint PRIMARY KEY,
             objectid    bigint NOT NULL,
@@ -134,8 +176,6 @@ public class Migrator(INpgsqlConnectionFactory factory, ILogger<Migrator> logger
             isactual    boolean,
             isactive    boolean
         );
-        CREATE INDEX IF NOT EXISTS ix_apartments_objectid ON fias.apartments(objectid);
-
         CREATE TABLE IF NOT EXISTS fias.rooms (
             id          bigint PRIMARY KEY,
             objectid    bigint NOT NULL,
@@ -151,8 +191,6 @@ public class Migrator(INpgsqlConnectionFactory factory, ILogger<Migrator> logger
             isactual    boolean,
             isactive    boolean
         );
-        CREATE INDEX IF NOT EXISTS ix_rooms_objectid ON fias.rooms(objectid);
-
         CREATE TABLE IF NOT EXISTS fias.mun_hierarchy (
             id          bigint PRIMARY KEY,
             objectid    bigint NOT NULL,
@@ -163,8 +201,6 @@ public class Migrator(INpgsqlConnectionFactory factory, ILogger<Migrator> logger
             enddate     date,
             isactive    boolean
         );
-        CREATE INDEX IF NOT EXISTS ix_mun_hierarchy_objectid ON fias.mun_hierarchy(objectid);
-
         CREATE TABLE IF NOT EXISTS fias.adm_hierarchy (
             id          bigint PRIMARY KEY,
             objectid    bigint NOT NULL,
@@ -175,10 +211,6 @@ public class Migrator(INpgsqlConnectionFactory factory, ILogger<Migrator> logger
             enddate     date,
             isactive    boolean
         );
-        CREATE INDEX IF NOT EXISTS ix_adm_hierarchy_objectid ON fias.adm_hierarchy(objectid);
-        CREATE INDEX IF NOT EXISTS ix_adm_hierarchy_parentobjid ON fias.adm_hierarchy(parentobjid)
-            WHERE isactive = true;
-
         CREATE TABLE IF NOT EXISTS fias.addressobject_types (
             id          integer PRIMARY KEY,
             level       integer,
@@ -254,8 +286,128 @@ public class Migrator(INpgsqlConnectionFactory factory, ILogger<Migrator> logger
                     enddate     date,
                     PRIMARY KEY (objtype, id)
                 );
-                CREATE INDEX ix_params_objectid_typeid ON fias.params(objectid, typeid);
             END IF;
         END $$;
+
+        -- =====================================================================
+        --  Денормализованный поисковый слой (schema search). Чистый snake_case.
+        --  Плоские таблицы наполняются ПОСЛЕ импорта (SearchProjectionBuilder).
+        --  Поиск читает только их — без JOIN по сырым fias.* и без обхода дерева.
+        -- =====================================================================
+        CREATE SCHEMA IF NOT EXISTS search;
+
+        -- Справочник типов адресообразующих элементов (для отображения/фильтров).
+        CREATE TABLE IF NOT EXISTS search.address_object_types (
+            id          integer PRIMARY KEY,
+            level       integer,
+            short_name  text,
+            name        text
+        );
+
+        -- Регионы/города/улицы: имя + денормализованный полный путь + FTS-вектор.
+        CREATE TABLE IF NOT EXISTS search.address_objects (
+            object_id         bigint PRIMARY KEY,
+            object_guid       uuid,
+            parent_object_id  bigint,      -- непосредственный родитель в адм. дереве
+            parent_guid       uuid,
+            region_object_id  bigint,      -- корень пути (субъект РФ) — для приоритета/фильтра
+            path              text,        -- денормализованный путь (objectid.objectid…) для сужения поддерева
+            level             integer,
+            type_name         text,
+            name              text,
+            full_name         text,        -- денормализованная полная адресная строка (для отображения)
+            -- Реквизиты объекта (из fias.params) — для инлайн-выдачи в стиле DaData.
+            region_code       integer,
+            postal_code       text,
+            okato             text,
+            oktmo             text,
+            ifns_ul           text,
+            ifns_fl           text,
+            kladr_code        text,
+            -- Структурный сплит адреса (имена предков по уровням ГАР).
+            region            text,
+            area              text,
+            city              text,
+            settlement        text,
+            street            text,
+            name_tsv          tsvector GENERATED ALWAYS AS (to_tsvector('russian', coalesce(name, ''))) STORED
+        );
+
+        -- Дома, привязанные к parent_object_id/parent_guid (улица/нас. пункт).
+        CREATE TABLE IF NOT EXISTS search.houses (
+            object_id         bigint PRIMARY KEY,
+            object_guid       uuid,
+            parent_object_id  bigint,
+            parent_guid       uuid,
+            path              text,
+            house_num         text,
+            add_num1          text,
+            add_num2          text,
+            house_type        integer,
+            add_type1         integer,
+            add_type2         integer,
+            full_name         text,
+            -- Реквизиты дома (из fias.params).
+            region_code       integer,
+            postal_code       text,
+            okato             text,
+            oktmo             text,
+            ifns_ul           text,
+            ifns_fl           text,
+            kladr_code        text,
+            -- Структурный сплит наследуется от родителя (улицы/нас. пункта); house = house_num.
+            region            text,
+            area              text,
+            city              text,
+            settlement        text,
+            street            text
+        );
+
+        -- Вторичные индексы search.* НЕ создаём здесь: их строит SearchProjectionBuilder
+        -- после массовой загрузки (drop → INSERT → create), чтобы не платить за поддержку
+        -- GiST/GIN на каждой вставке. Здесь — только таблицы и PK.
+        """;
+
+    // Вторичные (НЕ PK/уникальные) индексы fias.* — каждый отдельным оператором, чтобы строить
+    // их параллельно (на разных соединениях). PK/уникальные не трогаем — нужны для delta-UPSERT.
+    private static readonly string[] SecondaryIndexStatements =
+    [
+        "CREATE INDEX IF NOT EXISTS ix_addressobjects_objectid ON fias.addressobjects(objectid)",
+        "CREATE INDEX IF NOT EXISTS ix_addressobjects_name_trgm ON fias.addressobjects USING gin (name gin_trgm_ops) WHERE isactive = true AND isactual = true",
+        "CREATE INDEX IF NOT EXISTS ix_addressobjects_objectguid ON fias.addressobjects(objectguid) WHERE isactive = true AND isactual = true",
+        "CREATE INDEX IF NOT EXISTS ix_houses_objectid ON fias.houses(objectid)",
+        "CREATE INDEX IF NOT EXISTS ix_apartments_objectid ON fias.apartments(objectid)",
+        "CREATE INDEX IF NOT EXISTS ix_rooms_objectid ON fias.rooms(objectid)",
+        "CREATE INDEX IF NOT EXISTS ix_mun_hierarchy_objectid ON fias.mun_hierarchy(objectid)",
+        "CREATE INDEX IF NOT EXISTS ix_adm_hierarchy_objectid ON fias.adm_hierarchy(objectid)",
+        "CREATE INDEX IF NOT EXISTS ix_adm_hierarchy_parentobjid ON fias.adm_hierarchy(parentobjid) WHERE isactive = true",
+        "CREATE INDEX IF NOT EXISTS ix_params_objectid_typeid ON fias.params(objectid, typeid)",
+    ];
+
+    // Те же индексы одним батчем — для idempotent-создания в EnsureSchema (на пустых/малых таблицах).
+    private static readonly string SecondaryIndexesBatch = string.Join(";\n", SecondaryIndexStatements) + ";";
+
+    private const string DropFiasSecondaryIndexesDdl = """
+        DROP INDEX IF EXISTS fias.ix_addressobjects_objectid;
+        DROP INDEX IF EXISTS fias.ix_addressobjects_name_trgm;
+        DROP INDEX IF EXISTS fias.ix_addressobjects_objectguid;
+        DROP INDEX IF EXISTS fias.ix_houses_objectid;
+        DROP INDEX IF EXISTS fias.ix_apartments_objectid;
+        DROP INDEX IF EXISTS fias.ix_rooms_objectid;
+        DROP INDEX IF EXISTS fias.ix_mun_hierarchy_objectid;
+        DROP INDEX IF EXISTS fias.ix_adm_hierarchy_objectid;
+        DROP INDEX IF EXISTS fias.ix_adm_hierarchy_parentobjid;
+        DROP INDEX IF EXISTS fias.ix_params_objectid_typeid;
+        """;
+
+    private const string AnalyzeDdl = """
+        ANALYZE fias.addressobjects;
+        ANALYZE fias.houses;
+        ANALYZE fias.apartments;
+        ANALYZE fias.rooms;
+        ANALYZE fias.mun_hierarchy;
+        ANALYZE fias.adm_hierarchy;
+        ANALYZE fias.params;
+        ANALYZE fias.reestr_objects;
         """;
 }

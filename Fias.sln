@@ -6,7 +6,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Fias.Api", "Fias.Api\Fias.A
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{94A12A72-3326-4315-B1A5-0B117FBE71FC}"
 	ProjectSection(SolutionItems) = preProject
-		compose.yaml = compose.yaml
+		docker-compose.yml = docker-compose.yml
+		docker\postgres\init\01-init-extensions.sql = docker\postgres\init\01-init-extensions.sql
+		.env = .env
+		.env.example = .env.example
 	EndProjectSection
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Fias.Service.Updater", "Fias.Service.Updater\Fias.Service.Updater.csproj", "{C9155D77-7DDE-4407-AB03-B247A57F8249}"
@@ -16,6 +19,10 @@ EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Fias.Application", "Fias.Application\Fias.Application.csproj", "{C3F2934F-DDEF-451D-A9D6-86C2DA74F5D8}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Fias.Infrastructure", "Fias.Infrastructure\Fias.Infrastructure.csproj", "{D0F34AA6-9B76-40C6-B9C1-74C6EB95EC85}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{8D62521F-F739-4130-8045-D61D2E915378}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Fias.Tests", "Fias.Tests\Fias.Tests.csproj", "{DAE3F0FF-9958-45E6-8BF9-5B8313A36CC8}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -87,14 +94,26 @@ Global
 		{D0F34AA6-9B76-40C6-B9C1-74C6EB95EC85}.Release|x64.Build.0 = Release|Any CPU
 		{D0F34AA6-9B76-40C6-B9C1-74C6EB95EC85}.Release|x86.ActiveCfg = Release|Any CPU
 		{D0F34AA6-9B76-40C6-B9C1-74C6EB95EC85}.Release|x86.Build.0 = Release|Any CPU
+		{DAE3F0FF-9958-45E6-8BF9-5B8313A36CC8}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{DAE3F0FF-9958-45E6-8BF9-5B8313A36CC8}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{DAE3F0FF-9958-45E6-8BF9-5B8313A36CC8}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{DAE3F0FF-9958-45E6-8BF9-5B8313A36CC8}.Debug|x64.Build.0 = Debug|Any CPU
+		{DAE3F0FF-9958-45E6-8BF9-5B8313A36CC8}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{DAE3F0FF-9958-45E6-8BF9-5B8313A36CC8}.Debug|x86.Build.0 = Debug|Any CPU
+		{DAE3F0FF-9958-45E6-8BF9-5B8313A36CC8}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{DAE3F0FF-9958-45E6-8BF9-5B8313A36CC8}.Release|Any CPU.Build.0 = Release|Any CPU
+		{DAE3F0FF-9958-45E6-8BF9-5B8313A36CC8}.Release|x64.ActiveCfg = Release|Any CPU
+		{DAE3F0FF-9958-45E6-8BF9-5B8313A36CC8}.Release|x64.Build.0 = Release|Any CPU
+		{DAE3F0FF-9958-45E6-8BF9-5B8313A36CC8}.Release|x86.ActiveCfg = Release|Any CPU
+		{DAE3F0FF-9958-45E6-8BF9-5B8313A36CC8}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{862AEA8E-5612-420A-BD5F-4A02E4989465} = {3D35FA3B-23FE-49CD-B5E8-41756B3C5753}
-		{C3F2934F-DDEF-451D-A9D6-86C2DA74F5D8} = {3D35FA3B-23FE-49CD-B5E8-41756B3C5753}
 		{FDBA16AC-F90F-40AE-8DCD-88E58A2008B8} = {3D35FA3B-23FE-49CD-B5E8-41756B3C5753}
+		{C3F2934F-DDEF-451D-A9D6-86C2DA74F5D8} = {3D35FA3B-23FE-49CD-B5E8-41756B3C5753}
 		{D0F34AA6-9B76-40C6-B9C1-74C6EB95EC85} = {3D35FA3B-23FE-49CD-B5E8-41756B3C5753}
 	EndGlobalSection
 EndGlobal

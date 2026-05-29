@@ -7,6 +7,7 @@ using Fias.Service.Updater.Services.Db;
 using Fias.Service.Updater.Services.Downloading;
 using Fias.Service.Updater.Services.Importing;
 using Fias.Service.Updater.Services.Schema;
+using Fias.Service.Updater.Services.Search;
 using Fias.Service.Updater.Services.State;
 using Hangfire;
 using Hangfire.PostgreSql;
@@ -24,12 +25,7 @@ builder.Services.AddHangfire(cfg =>
         opt => opt.UseNpgsqlConnection(builder.Configuration.GetConnectionString("Default")),
         new PostgreSqlStorageOptions
         {
-            // Полный импорт ФИАС идёт дольше дефолтного invisibility timeout (30 мин),
-            // из-за чего Hangfire считал джобу брошенной и повторно её запускал.
-            // Sliding-режим заставляет воркер слать heartbeat, пока джоба выполняется,
-            // поэтому работающий импорт не перезабирается. Таймаут — страховка сверху.
-            UseSlidingInvisibilityTimeout = true,
-            InvisibilityTimeout = TimeSpan.FromHours(6),
+            UseSlidingInvisibilityTimeout = true
         });
 });
 
@@ -43,6 +39,7 @@ builder.Services.AddSingleton<INpgsqlConnectionFactory, NpgsqlConnectionFactory>
 builder.Services.AddSingleton<IFiasArchiveReader, FiasArchiveReader>();
 
 builder.Services.AddScoped<IMigrator, Migrator>();
+builder.Services.AddScoped<ISearchProjectionBuilder, SearchProjectionBuilder>();
 builder.Services.AddScoped<IFiasVersionStore, FiasVersionStore>();
 builder.Services.AddScoped<IFiasImportOrchestrator, FiasImportOrchestrator>();
 builder.Services.AddScoped<FiasUpdateJob>();

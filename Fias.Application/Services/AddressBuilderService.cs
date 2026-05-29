@@ -1,12 +1,12 @@
 using System.Globalization;
+using Dapper;
 using Fias.Application.Abstractions;
 using Fias.Application.Models;
 using Fias.Domain.Entities;
-using Microsoft.EntityFrameworkCore;
 
 namespace Fias.Application.Services;
 
-public class AddressBuilderService(IFiasDbContext db) : IAddressBuilderService
+public class AddressBuilderService(ISqlConnectionFactory factory) : IAddressBuilderService
 {
     // Уровни ФИАС (см. OBJECT_LEVELS): 1..8 — адресообразующие, 9 — земельный участок,
     // 10 — здание, 11 — помещение, 12 — комната, 17 — машино-место.
@@ -30,33 +30,25 @@ public class AddressBuilderService(IFiasDbContext db) : IAddressBuilderService
     private const int PtOfficial = 16;    // Официальное наименование (обычно для субъектов РФ).
     private const int PtOktmoBudget = 21;
 
-    private static readonly int[] RelevantParamTypeIds =
-    [
-        PtIfnsFl, PtIfnsUl, PtPostal, PtOkato, PtOktmo, PtCadastr,
-        PtKladr, PtRegionCode, PtOfficial, PtOktmoBudget
-    ];
-
     /// <summary>Тип адресации: 1 — административное деление (строим по adm_hierarchy).</summary>
     private const int AdmAddressType = 1;
 
     public async Task<AddressDto?> BuildByObjectIdAsync(long objectId, CancellationToken ct)
     {
-        var hierarchy = await db.AdmHierarchy.AsNoTracking()
-            .Where(h => h.ObjectId == objectId && h.IsActive == true)
-            .Select(h => new { h.ObjectId, h.Path })
-            .FirstOrDefaultAsync(ct);
+        await using var conn = await factory.OpenAsync(ct);
+        var row = await conn.QueryFirstOrDefaultAsync<HierRow>(new CommandDefinition(
+            "SELECT objectid, path FROM fias.adm_hierarchy WHERE objectid = @objectId AND isactive = true LIMIT 1",
+            new { objectId }, cancellationToken: ct));
 
-        return hierarchy?.Path is null
-            ? null
-            : await BuildByPathAsync(hierarchy.ObjectId, hierarchy.Path, ct);
+        return row.Path is null ? null : await BuildByPathAsync(row.ObjectId, row.Path, ct);
     }
 
     public async Task<AddressDto?> BuildByObjectGuidAsync(Guid objectGuid, CancellationToken ct)
     {
-        var objectId = await db.AddressObjects.AsNoTracking()
-            .Where(a => a.ObjectGuid == objectGuid && a.IsActual == true && a.IsActive == true)
-            .Select(a => (long?)a.ObjectId)
-            .FirstOrDefaultAsync(ct);
+        await using var conn = await factory.OpenAsync(ct);
+        var objectId = await conn.QueryFirstOrDefaultAsync<long?>(new CommandDefinition(
+            "SELECT objectid FROM fias.addressobjects WHERE objectguid = @objectGuid AND isactual = true AND isactive = true LIMIT 1",
+            new { objectGuid }, cancellationToken: ct));
 
         return objectId is null ? null : await BuildByObjectIdAsync(objectId.Value, ct);
     }
@@ -66,45 +58,46 @@ public class AddressBuilderService(IFiasDbContext db) : IAddressBuilderService
         var ids = ParsePath(path);
         if (ids.Count == 0) return null;
 
-        // 1. Тип каждого уровня — из reestr_objects.
-        var levels = await db.ReestrObjects.AsNoTracking()
-            .Where(r => ids.Contains(r.ObjectId))
-            .Select(r => new { r.ObjectId, r.LevelId, r.ObjectGuid })
-            .ToDictionaryAsync(x => x.ObjectId, ct);
+        await using var conn = await factory.OpenAsync(ct);
 
-        // 2. Подгружаем основные данные по группам уровней одним запросом каждая.
-        var addressList = await db.AddressObjects.AsNoTracking()
-            .Where(a => a.IsActual == true && a.IsActive == true && ids.Contains(a.ObjectId))
-            .ToListAsync(ct);
+        // 1. Тип каждого уровня — из reestr_objects (PK objectid -> уникально).
+        var levels = (await conn.QueryAsync<LevelRow>(new CommandDefinition(
+                "SELECT objectid, levelid, objectguid FROM fias.reestr_objects WHERE objectid IN @ids",
+                new { ids }, cancellationToken: ct)))
+            .ToDictionary(x => x.ObjectId);
+
+        // 2. Основные данные по группам уровней — по одному запросу каждая.
+        var addressList = (await conn.QueryAsync<AddressObject>(new CommandDefinition(
+            "SELECT * FROM fias.addressobjects WHERE isactual = true AND isactive = true AND objectid IN @ids",
+            new { ids }, cancellationToken: ct))).AsList();
         var addressDict = addressList.GroupBy(a => a.ObjectId).ToDictionary(g => g.Key, g => g.First());
 
-        var houseList = await db.Houses.AsNoTracking()
-            .Where(h => h.IsActual == true && h.IsActive == true && ids.Contains(h.ObjectId))
-            .ToListAsync(ct);
+        var houseList = (await conn.QueryAsync<House>(new CommandDefinition(
+            "SELECT * FROM fias.houses WHERE isactual = true AND isactive = true AND objectid IN @ids",
+            new { ids }, cancellationToken: ct))).AsList();
         var houseDict = houseList.GroupBy(h => h.ObjectId).ToDictionary(g => g.Key, g => g.First());
 
-        var apartmentList = await db.Apartments.AsNoTracking()
-            .Where(a => a.IsActual == true && a.IsActive == true && ids.Contains(a.ObjectId))
-            .ToListAsync(ct);
+        var apartmentList = (await conn.QueryAsync<Apartment>(new CommandDefinition(
+            "SELECT * FROM fias.apartments WHERE isactual = true AND isactive = true AND objectid IN @ids",
+            new { ids }, cancellationToken: ct))).AsList();
         var apartmentDict = apartmentList.GroupBy(a => a.ObjectId).ToDictionary(g => g.Key, g => g.First());
 
-        var roomList = await db.Rooms.AsNoTracking()
-            .Where(r => r.IsActual == true && r.IsActive == true && ids.Contains(r.ObjectId))
-            .ToListAsync(ct);
+        var roomList = (await conn.QueryAsync<Room>(new CommandDefinition(
+            "SELECT * FROM fias.rooms WHERE isactual = true AND isactive = true AND objectid IN @ids",
+            new { ids }, cancellationToken: ct))).AsList();
         var roomDict = roomList.GroupBy(r => r.ObjectId).ToDictionary(g => g.Key, g => g.First());
 
         // 3. Параметры (PARAM) по нужным TYPEID — индекс, ОКАТО, ОКТМО, КЛАДР, кадастр и т.д.
-        //    Грузим плоско и группируем на клиенте (EF Core не транслирует GroupBy→First()).
         //    Сортировка по StartDate/Id desc — берём актуальное значение каждого (object, typeid).
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
-        var paramRows = await db.Params.AsNoTracking()
-            .Where(p => ids.Contains(p.ObjectId)
-                        && p.TypeId != null && RelevantParamTypeIds.Contains(p.TypeId.Value)
-                        && (p.EndDate == null || p.EndDate > today))
-            .OrderBy(p => p.ObjectId).ThenBy(p => p.TypeId)
-            .ThenByDescending(p => p.StartDate).ThenByDescending(p => p.Id)
-            .Select(p => new { p.ObjectId, p.TypeId, p.Value })
-            .ToListAsync(ct);
+        var paramRows = await conn.QueryAsync<ParamRow>(new CommandDefinition("""
+            SELECT objectid, typeid, value
+            FROM fias.params
+            WHERE objectid IN @ids
+              AND typeid IN (1, 2, 5, 6, 7, 8, 11, 12, 16, 21)
+              AND (enddate IS NULL OR enddate > @today)
+            ORDER BY objectid, typeid, startdate DESC NULLS LAST, id DESC
+            """, new { ids, today }, cancellationToken: ct));
 
         var paramsByObj = new Dictionary<long, Dictionary<int, string>>();
         foreach (var row in paramRows)
@@ -116,9 +109,8 @@ public class AddressBuilderService(IFiasDbContext db) : IAddressBuilderService
         }
 
         // 4. Справочники типов — небольшие, грузим целиком (активные записи).
-        var addressTypeList = await db.AddressObjectTypes.AsNoTracking()
-            .Where(t => t.IsActive == true)
-            .ToListAsync(ct);
+        var addressTypeList = (await conn.QueryAsync<AddressObjectType>(new CommandDefinition(
+            "SELECT * FROM fias.addressobject_types WHERE isactive = true", cancellationToken: ct))).AsList();
         var addressTypeByLevelShort = addressTypeList
             .Where(t => t.Level is not null && !string.IsNullOrWhiteSpace(t.ShortName))
             .GroupBy(t => (t.Level!.Value, t.ShortName!.Trim()), AddressTypeKeyComparer.Instance)
@@ -128,9 +120,12 @@ public class AddressBuilderService(IFiasDbContext db) : IAddressBuilderService
             .GroupBy(t => t.Level!.Value)
             .ToDictionary(g => g.Key, g => g.First());
 
-        var houseTypes = await db.HouseTypes.AsNoTracking().Where(t => t.IsActive == true).ToDictionaryAsync(t => t.Id, ct);
-        var apartmentTypes = await db.ApartmentTypes.AsNoTracking().Where(t => t.IsActive == true).ToDictionaryAsync(t => t.Id, ct);
-        var roomTypes = await db.RoomTypes.AsNoTracking().Where(t => t.IsActive == true).ToDictionaryAsync(t => t.Id, ct);
+        var houseTypes = (await conn.QueryAsync<HouseType>(new CommandDefinition(
+            "SELECT * FROM fias.house_types WHERE isactive = true", cancellationToken: ct))).ToDictionary(t => t.Id);
+        var apartmentTypes = (await conn.QueryAsync<ApartmentType>(new CommandDefinition(
+            "SELECT * FROM fias.apartment_types WHERE isactive = true", cancellationToken: ct))).ToDictionary(t => t.Id);
+        var roomTypes = (await conn.QueryAsync<RoomType>(new CommandDefinition(
+            "SELECT * FROM fias.room_types WHERE isactive = true", cancellationToken: ct))).ToDictionary(t => t.Id);
 
         // 5. Собираем иерархию по порядку из PATH.
         var items = new List<AddressHierarchyItemDto>(ids.Count);
@@ -417,4 +412,9 @@ public class AddressBuilderService(IFiasDbContext db) : IAddressBuilderService
         }
         return result;
     }
+
+    // --- Строки Dapper-маппинга ---------------------------------------------
+    private readonly record struct HierRow(long ObjectId, string? Path);
+    private readonly record struct LevelRow(long ObjectId, int? LevelId, Guid? ObjectGuid);
+    private readonly record struct ParamRow(long ObjectId, int? TypeId, string? Value);
 }

@@ -1,9 +1,11 @@
+using System.Collections.Concurrent;
 using Fias.Service.Updater.Options;
 using Fias.Service.Updater.Services.Archives;
 using Fias.Service.Updater.Services.Downloading;
 using Fias.Service.Updater.Services.Importing;
 using Fias.Service.Updater.Services.Progress;
 using Fias.Service.Updater.Services.Schema;
+using Fias.Service.Updater.Services.Search;
 using Fias.Service.Updater.Services.State;
 using Microsoft.Extensions.Options;
 
@@ -21,6 +23,7 @@ public class FiasImportOrchestrator(
     IFiasDownloader downloader,
     IFiasArchiveReader archiveReader,
     IFiasEntityImporterRegistry importers,
+    ISearchProjectionBuilder searchProjection,
     IFiasVersionStore versionStore,
     IOptions<FiasOptions> options,
     ILogger<FiasImportOrchestrator> logger) : IFiasImportOrchestrator
@@ -38,7 +41,18 @@ public class FiasImportOrchestrator(
         // Полная перезаливка — чистим все таблицы базового набора, чтобы COPY не упирался в PK.
         await migrator.TruncateAllAsync(ct);
 
+        // Снимаем вторичные индексы fias.* на время COPY: их поддержка на каждой вставке (особенно
+        // GIN name_trgm) — главный тормоз при параллельной заливке. Построим разом после.
+        progress.WriteLine("Снятие вторичных индексов fias.* перед заливкой");
+        await migrator.DropSecondaryIndexesAsync(ct);
+
         await ProcessArchiveAsync(zipPath, ImportMode.Full, progress, ct);
+
+        progress.WriteLine("Построение вторичных индексов fias.* (после заливки)");
+        await migrator.RebuildSecondaryIndexesAsync(Math.Clamp(_options.ImportParallelism, 1, 16), ct);
+
+        // Денормализованную проекцию для поиска собираем после заливки сырых данных.
+        await searchProjection.RebuildAsync(progress, ct);
 
         var info = await fnsClient.GetLastAsync(ct);
         await versionStore.SetVersionAsync(info, ct);
@@ -71,6 +85,10 @@ public class FiasImportOrchestrator(
         logger.LogInformation("Применение дельты {From} → {To} из {Path}", current, info.VersionId, zipPath);
 
         await ProcessArchiveAsync(zipPath, ImportMode.Delta, progress, ct);
+
+        // После дельты пересобираем проекцию целиком (v1) — гарантированно консистентно.
+        await searchProjection.RebuildAsync(progress, ct);
+
         await versionStore.SetVersionAsync(info, ct);
 
         progress.WriteLine($"Дельта применена, версия {info.VersionId}");
@@ -102,28 +120,44 @@ public class FiasImportOrchestrator(
 
     private async Task ProcessArchiveAsync(string zipPath, ImportMode mode, IProgressSink progress, CancellationToken ct)
     {
-        // Перед полной заливкой очищаем целевые таблицы один раз — все импортёры внутри пишут только COPY.
-        // (В реальном сценарии стоит делать всё в одной транзакции на сущность, но это потребует
-        //  переработки контракта импортёра; в первой версии — простое решение.)
-        var truncatedTables = new HashSet<string>();
+        // Таблицы уже очищены один раз в RunFullAsync (TruncateAllAsync). Импортёры — stateless
+        // синглтоны, каждый ImportAsync открывает своё соединение и пишет COPY/UPSERT независимо,
+        // поэтому файлы можно лить параллельно.
+        var entries = archiveReader.Enumerate(zipPath)
+            .Where(e => importers.Resolve(e.Kind) is not null)
+            .ToList();
 
-        foreach (var entry in archiveReader.Enumerate(zipPath))
+        if (entries.Count == 0)
         {
-            ct.ThrowIfCancellationRequested();
-
-            var importer = importers.Resolve(entry.Kind);
-            if (importer is null)
-            {
-                logger.LogDebug("Пропускаем {File} — нет импортёра для {Kind}", entry.FullName, entry.Kind);
-                continue;
-            }
-
-            var msg = $"→ {entry.FullName} [{entry.Kind}, region={entry.RegionCode ?? "-"}]";
-            progress.WriteLine(msg);
-            logger.LogInformation(msg);
-
-            await using var stream = entry.OpenStream();
-            await importer.ImportAsync(stream, mode, ct);
+            progress.WriteLine("В архиве нет файлов с известными импортёрами");
+            return;
         }
+
+        var parallelism = Math.Clamp(_options.ImportParallelism, 1, 16);
+        parallelism = Math.Min(parallelism, entries.Count);
+        progress.WriteLine($"Импорт {entries.Count} файлов, параллелизм {parallelism}");
+
+        // Work-stealing: общая очередь файлов, у каждого воркера — СВОЙ ZipArchive (он не
+        // потокобезопасен) и собственное соединение через ImportAsync.
+        var queue = new ConcurrentQueue<FiasArchiveEntry>(entries);
+        var processed = 0;
+
+        var workers = Enumerable.Range(0, parallelism).Select(_ => Task.Run(async () =>
+        {
+            using var accessor = archiveReader.OpenAccessor(zipPath);
+            while (queue.TryDequeue(out var entry))
+            {
+                ct.ThrowIfCancellationRequested();
+                var importer = importers.Resolve(entry.Kind)!;
+
+                await using (var stream = accessor.Open(entry.FullName))
+                    await importer.ImportAsync(stream, mode, ct);
+
+                var n = Interlocked.Increment(ref processed);
+                progress.WriteLine($"[{n}/{entries.Count}] {entry.FullName} [{entry.Kind}, region={entry.RegionCode ?? "-"}]");
+            }
+        }, ct)).ToArray();
+
+        await Task.WhenAll(workers);
     }
 }

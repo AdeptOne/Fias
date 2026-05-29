@@ -1,11 +1,12 @@
+using System.Globalization;
+using Dapper;
 using Fias.Application.Abstractions;
 using Fias.Application.Models;
 using Fias.Domain.Entities;
-using Microsoft.EntityFrameworkCore;
 
 namespace Fias.Application.Services;
 
-public class HierarchyService(IFiasDbContext db) : IHierarchyService
+public class HierarchyService(ISqlConnectionFactory factory) : IHierarchyService
 {
     private const int LevelRegion = 1;
     private const int LevelHouse = 10;
@@ -14,27 +15,27 @@ public class HierarchyService(IFiasDbContext db) : IHierarchyService
 
     public async Task<IReadOnlyList<RegionDto>> GetRegionsAsync(CancellationToken ct)
     {
-        var regionReestrIds = await db.ReestrObjects.AsNoTracking()
-            .Where(r => r.LevelId == LevelRegion && r.IsActive == true)
-            .Select(r => r.ObjectId)
-            .ToListAsync(ct);
+        await using var conn = await factory.OpenAsync(ct);
 
-        var regions = await db.AddressObjects.AsNoTracking()
-            .Where(a => a.Level == LevelRegion && a.IsActual == true && a.IsActive == true
-                        && regionReestrIds.Contains(a.ObjectId))
-            .Select(a => new { a.ObjectId, a.ObjectGuid, a.Name, a.TypeName })
-            .ToListAsync(ct);
+        var regions = (await conn.QueryAsync<RegionRow>(new CommandDefinition("""
+            SELECT a.objectid, a.objectguid, a.name, a.typename
+            FROM fias.addressobjects a
+            JOIN fias.reestr_objects r ON r.objectid = a.objectid AND r.levelid = 1 AND r.isactive = true
+            WHERE a.level = 1 AND a.isactual = true AND a.isactive = true
+            """, cancellationToken: ct))).AsList();
 
-        // Учитываем «официальное наименование» — для субъектов оно может перекрывать NAME.
+        // «Официальное наименование» (typeid=16) может перекрывать NAME для субъектов.
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
-        var officials = await db.Params.AsNoTracking()
-            .Where(p => regionReestrIds.Contains(p.ObjectId)
-                        && p.TypeId == 16
-                        && (p.EndDate == null || p.EndDate > today))
-            .OrderBy(p => p.ObjectId).ThenByDescending(p => p.StartDate)
-            .Select(p => new { p.ObjectId, p.Value })
-            .ToListAsync(ct);
-        var officialDict = officials.GroupBy(x => x.ObjectId)
+        var officials = await conn.QueryAsync<OfficialRow>(new CommandDefinition("""
+            SELECT p.objectid, p.value
+            FROM fias.params p
+            WHERE p.typeid = 16 AND (p.enddate IS NULL OR p.enddate > @today)
+              AND p.objectid IN (SELECT objectid FROM fias.reestr_objects WHERE levelid = 1 AND isactive = true)
+            ORDER BY p.objectid, p.startdate DESC NULLS LAST
+            """, new { today }, cancellationToken: ct));
+
+        var officialDict = officials
+            .GroupBy(x => x.ObjectId)
             .ToDictionary(g => g.Key, g => g.First().Value);
 
         return regions
@@ -43,7 +44,7 @@ public class HierarchyService(IFiasDbContext db) : IHierarchyService
                 r.ObjectGuid,
                 (officialDict.GetValueOrDefault(r.ObjectId) ?? r.Name)?.Trim() ?? string.Empty,
                 r.TypeName?.Trim()))
-            .OrderBy(r => r.Name, StringComparer.Create(System.Globalization.CultureInfo.GetCultureInfo("ru-RU"), false))
+            .OrderBy(r => r.Name, StringComparer.Create(CultureInfo.GetCultureInfo("ru-RU"), false))
             .ToList();
     }
 
@@ -53,13 +54,19 @@ public class HierarchyService(IFiasDbContext db) : IHierarchyService
         page = Math.Max(page, 1);
         pageSize = Math.Clamp(pageSize, 1, 500);
 
-        var childIds = await ChildObjectIdsAsync(streetObjectId, LevelHouse, ct);
-        if (childIds.Count == 0)
-            return new PagedResult<HouseSummaryDto>(Array.Empty<HouseSummaryDto>(), 0, page, pageSize);
+        await using var conn = await factory.OpenAsync(ct);
 
-        var houses = await db.Houses.AsNoTracking()
-            .Where(h => childIds.Contains(h.ObjectId) && h.IsActual == true && h.IsActive == true)
-            .ToListAsync(ct);
+        // Дом привязан к улице через adm_hierarchy.parentobjid — один JOIN, без выборки id в приложение.
+        var houses = (await conn.QueryAsync<House>(new CommandDefinition("""
+            SELECT h.*
+            FROM fias.houses h
+            JOIN fias.adm_hierarchy ah ON ah.objectid = h.objectid AND ah.isactive = true AND ah.parentobjid = @street
+            JOIN fias.reestr_objects r ON r.objectid = h.objectid AND r.levelid = 10 AND r.isactive = true
+            WHERE h.isactual = true AND h.isactive = true
+            """, new { street = streetObjectId }, cancellationToken: ct))).AsList();
+
+        if (houses.Count == 0)
+            return new PagedResult<HouseSummaryDto>(Array.Empty<HouseSummaryDto>(), 0, page, pageSize);
 
         if (!string.IsNullOrWhiteSpace(numFilter))
         {
@@ -69,22 +76,13 @@ public class HierarchyService(IFiasDbContext db) : IHierarchyService
                 .ToList();
         }
 
-        var houseTypes = await db.HouseTypes.AsNoTracking()
-            .Where(t => t.IsActive == true)
-            .ToDictionaryAsync(t => t.Id, t => t.ShortName?.Trim() ?? string.Empty, ct);
+        var houseTypes = await LoadTypesAsync(conn, "fias.house_types", ct);
 
-        var ordered = houses
-            .OrderBy(h => h.HouseNum, NaturalStringComparer.Instance)
-            .ToList();
+        var ordered = houses.OrderBy(h => h.HouseNum, NaturalStringComparer.Instance).ToList();
         var total = ordered.Count;
         var pageItems = ordered.Skip((page - 1) * pageSize).Take(pageSize)
             .Select(h => new HouseSummaryDto(
-                h.ObjectId,
-                h.ObjectGuid,
-                h.HouseNum,
-                h.AddNum1,
-                h.AddNum2,
-                h.HouseType,
+                h.ObjectId, h.ObjectGuid, h.HouseNum, h.AddNum1, h.AddNum2, h.HouseType,
                 BuildHouseFullName(h, houseTypes)))
             .ToList();
 
@@ -97,13 +95,18 @@ public class HierarchyService(IFiasDbContext db) : IHierarchyService
         page = Math.Max(page, 1);
         pageSize = Math.Clamp(pageSize, 1, 500);
 
-        var childIds = await ChildObjectIdsAsync(houseObjectId, LevelApartment, ct);
-        if (childIds.Count == 0)
-            return new PagedResult<ApartmentSummaryDto>(Array.Empty<ApartmentSummaryDto>(), 0, page, pageSize);
+        await using var conn = await factory.OpenAsync(ct);
 
-        var apartments = await db.Apartments.AsNoTracking()
-            .Where(a => childIds.Contains(a.ObjectId) && a.IsActual == true && a.IsActive == true)
-            .ToListAsync(ct);
+        var apartments = (await conn.QueryAsync<Apartment>(new CommandDefinition("""
+            SELECT a.*
+            FROM fias.apartments a
+            JOIN fias.adm_hierarchy ah ON ah.objectid = a.objectid AND ah.isactive = true AND ah.parentobjid = @house
+            JOIN fias.reestr_objects r ON r.objectid = a.objectid AND r.levelid = 11 AND r.isactive = true
+            WHERE a.isactual = true AND a.isactive = true
+            """, new { house = houseObjectId }, cancellationToken: ct))).AsList();
+
+        if (apartments.Count == 0)
+            return new PagedResult<ApartmentSummaryDto>(Array.Empty<ApartmentSummaryDto>(), 0, page, pageSize);
 
         if (!string.IsNullOrWhiteSpace(numFilter))
         {
@@ -113,9 +116,7 @@ public class HierarchyService(IFiasDbContext db) : IHierarchyService
                 .ToList();
         }
 
-        var apartmentTypes = await db.ApartmentTypes.AsNoTracking()
-            .Where(t => t.IsActive == true)
-            .ToDictionaryAsync(t => t.Id, t => t.ShortName?.Trim() ?? string.Empty, ct);
+        var apartmentTypes = await LoadTypesAsync(conn, "fias.apartment_types", ct);
 
         var ordered = apartments.OrderBy(a => a.Number, NaturalStringComparer.Instance).ToList();
         var total = ordered.Count;
@@ -138,17 +139,20 @@ public class HierarchyService(IFiasDbContext db) : IHierarchyService
         page = Math.Max(page, 1);
         pageSize = Math.Clamp(pageSize, 1, 500);
 
-        var childIds = await ChildObjectIdsAsync(apartmentObjectId, LevelRoom, ct);
-        if (childIds.Count == 0)
+        await using var conn = await factory.OpenAsync(ct);
+
+        var rooms = (await conn.QueryAsync<Room>(new CommandDefinition("""
+            SELECT r.*
+            FROM fias.rooms r
+            JOIN fias.adm_hierarchy ah ON ah.objectid = r.objectid AND ah.isactive = true AND ah.parentobjid = @apartment
+            JOIN fias.reestr_objects ro ON ro.objectid = r.objectid AND ro.levelid = 12 AND ro.isactive = true
+            WHERE r.isactual = true AND r.isactive = true
+            """, new { apartment = apartmentObjectId }, cancellationToken: ct))).AsList();
+
+        if (rooms.Count == 0)
             return new PagedResult<RoomSummaryDto>(Array.Empty<RoomSummaryDto>(), 0, page, pageSize);
 
-        var rooms = await db.Rooms.AsNoTracking()
-            .Where(r => childIds.Contains(r.ObjectId) && r.IsActual == true && r.IsActive == true)
-            .ToListAsync(ct);
-
-        var roomTypes = await db.RoomTypes.AsNoTracking()
-            .Where(t => t.IsActive == true)
-            .ToDictionaryAsync(t => t.Id, t => t.ShortName?.Trim() ?? string.Empty, ct);
+        var roomTypes = await LoadTypesAsync(conn, "fias.room_types", ct);
 
         var ordered = rooms.OrderBy(r => r.Number, NaturalStringComparer.Instance).ToList();
         var total = ordered.Count;
@@ -165,19 +169,13 @@ public class HierarchyService(IFiasDbContext db) : IHierarchyService
         return new PagedResult<RoomSummaryDto>(pageItems, total, page, pageSize);
     }
 
-    private async Task<List<long>> ChildObjectIdsAsync(long parentObjectId, int childLevel, CancellationToken ct)
+    /// <summary>Справочник «id → краткий тип» из *_types таблицы.</summary>
+    private static async Task<Dictionary<int, string>> LoadTypesAsync(
+        System.Data.Common.DbConnection conn, string table, CancellationToken ct)
     {
-        var ids = await db.AdmHierarchy.AsNoTracking()
-            .Where(h => h.ParentObjId == parentObjectId && h.IsActive == true)
-            .Select(h => h.ObjectId)
-            .ToListAsync(ct);
-        if (ids.Count == 0) return ids;
-
-        // Фильтр по уровню для надёжности (на случай, если в иерархии встречаются разные).
-        return await db.ReestrObjects.AsNoTracking()
-            .Where(r => ids.Contains(r.ObjectId) && r.LevelId == childLevel && r.IsActive == true)
-            .Select(r => r.ObjectId)
-            .ToListAsync(ct);
+        var rows = await conn.QueryAsync<(int Id, string? ShortName)>(new CommandDefinition(
+            $"SELECT id, shortname FROM {table} WHERE isactive = true", cancellationToken: ct));
+        return rows.ToDictionary(x => x.Id, x => x.ShortName?.Trim() ?? string.Empty);
     }
 
     private static string BuildHouseFullName(House h, Dictionary<int, string> houseTypes)
@@ -191,6 +189,9 @@ public class HierarchyService(IFiasDbContext db) : IHierarchyService
         if (!string.IsNullOrEmpty(h.AddNum2)) parts.Add(h.AddNum2.Trim());
         return string.Join(" ", parts);
     }
+
+    private readonly record struct RegionRow(long ObjectId, Guid? ObjectGuid, string? Name, string? TypeName);
+    private readonly record struct OfficialRow(long ObjectId, string? Value);
 
     /// <summary>Сравнение строк-номеров «по-человечески»: «2» меньше «10».</summary>
     private sealed class NaturalStringComparer : IComparer<string?>

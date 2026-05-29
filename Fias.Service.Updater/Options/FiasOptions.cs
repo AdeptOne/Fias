@@ -17,8 +17,11 @@ public class FiasOptions
     /// <summary>Имя файла дельта-выгрузки, скачивается каждый день.</summary>
     public string DeltaArchiveFileName { get; set; } = "gar_delta_xml.zip";
 
-    /// <summary>Размер батча для bulk-импорта (COPY).</summary>
+    /// <summary>Размер батча для bulk-импорта (COPY) — влияет на частоту лог-строк прогресса.</summary>
     public int CopyBatchSize { get; set; } = 5000;
+
+    /// <summary>Число параллельных воркеров импорта файлов архива (1 = последовательно). Клампится в 1..16.</summary>
+    public int ImportParallelism { get; set; } = 4;
 
     /// <summary>Список регионов для импорта (двузначные коды). Пусто — все регионы.</summary>
     public string[] Regions { get; set; } = [];

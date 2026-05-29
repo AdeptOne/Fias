@@ -1,0 +1,139 @@
+# ============================================================================
+#  docker-compose.yml — единое локальное окружение ФИАС:
+#  PostgreSQL + Web API (Fias.Api) + фоновый обновлятор (Fias.Service.Updater).
+#
+#  Секреты и порты вынесены в .env (рядом с этим файлом). Compose читает его сам.
+#  Старт:              cp .env.example .env  &&  docker compose up -d --build
+#  Логи API:           docker compose logs -f fias.api
+#  Логи обновлятора:   docker compose logs -f fias.service.updater
+#  Остановить:         docker compose down        (данные БД сохранятся в volume)
+#  Снести вместе с БД: docker compose down -v
+# ============================================================================
+
+services:
+
+  # --------------------------------------------------------------------------
+  #  PostgreSQL — хранилище ГАР (74 региона) + индексы гибридного поиска.
+  # --------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: fias-postgres
+    restart: unless-stopped
+
+    environment:
+      # Значения берутся из .env (с дефолтами на случай отсутствия переменной).
+      POSTGRES_DB: ${POSTGRES_DB:-fias}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-secret}
+      # Кодировка и локаль кластера. В alpine доступна C.UTF-8 — для pg_trgm её
+      # достаточно (триграммы работают побайтово), а C-сортировка ещё и быстрее.
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C.UTF-8"
+      PGDATA: /var/lib/postgresql/data/pgdata
+
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"   # проброс наружу для psql/DBeaver с хоста
+
+    # --- Тюнинг производительности через флаги запуска postgres --------------
+    # Значения рассчитаны на dev-машину с ~8–16 ГБ ОЗУ. Под свой хост — поправьте
+    # (общее правило: shared_buffers ≈ 25% RAM, effective_cache_size ≈ 50–75% RAM).
+    command:
+      - "postgres"
+      # Кэш страниц самого Postgres. Больше -> меньше чтений с диска под нашими объёмами.
+      - "-c"
+      - "shared_buffers=2GB"
+      # КЛЮЧЕВОЕ для импорта: память на построение одного индекса (CREATE INDEX,
+      # VACUUM). Чем больше — тем быстрее собираются GIN/GiST по триграммам.
+      - "-c"
+      - "maintenance_work_mem=1GB"
+      # Память на сортировку/хэш в одном шаге запроса (поиск, ORDER BY).
+      - "-c"
+      - "work_mem=64MB"
+      # Подсказка планировщику, сколько всего ОЗУ доступно под кэш ОС+БД.
+      - "-c"
+      - "effective_cache_size=6GB"
+      # Реже и крупнее чекпоинты при массовой загрузке -> меньше нагрузка на диск.
+      - "-c"
+      - "max_wal_size=4GB"
+      - "-c"
+      - "min_wal_size=1GB"
+      - "-c"
+      - "checkpoint_completion_target=0.9"
+      # Сжатие WAL — экономит диск/IO при объёмном импорте ГАР.
+      - "-c"
+      - "wal_compression=on"
+      # SSD: случайное чтение почти как последовательное -> индексы выгоднее seqscan.
+      - "-c"
+      - "random_page_cost=1.1"
+      # Параллелизм: ускоряет построение b-tree индексов и параллельные запросы.
+      - "-c"
+      - "max_parallel_maintenance_workers=4"
+      - "-c"
+      - "max_parallel_workers_per_gather=4"
+      - "-c"
+      - "max_parallel_workers=8"
+      - "-c"
+      - "max_worker_processes=8"
+
+    # Параллельным воркерам нужна общая память в /dev/shm; дефолтные 64 МБ малы.
+    shm_size: "1gb"
+
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-fias}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  # --------------------------------------------------------------------------
+  #  Fias.Api — наш .NET 8 Web API (гибридный поиск по адресам).
+  # --------------------------------------------------------------------------
+  fias.api:
+    container_name: fias-api
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: Fias.Api/Dockerfile
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+    environment:
+      ConnectionStrings__Default: "Host=postgres;Database=${POSTGRES_DB:-fias};Username=${POSTGRES_USER:-postgres};Password=${POSTGRES_PASSWORD:-secret}"
+      ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT:-Development}
+
+    ports:
+      - "${API_PORT:-8080}:8080"   # http://localhost:8080 (Swagger, API, Hangfire)
+
+  # --------------------------------------------------------------------------
+  #  Fias.Service.Updater — фоновый воркер: скачивает и импортирует выгрузку ГАР.
+  # --------------------------------------------------------------------------
+  fias.service.updater:
+    container_name: fias-updater
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: Fias.Service.Updater/Dockerfile
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+    environment:
+      ConnectionStrings__Default: "Host=postgres;Database=${POSTGRES_DB:-fias};Username=${POSTGRES_USER:-postgres};Password=${POSTGRES_PASSWORD:-secret}"
+      # Каталог внутри контейнера, куда кладётся выгрузка (совпадает с appsettings).
+      Fias__ImportDirectory: "/fias/import"
+
+    volumes:
+      # Монтируем хостовую папку с выгрузкой ГАР внутрь контейнера.
+      - ${FIAS_IMPORT_DIR:-./fias-import}:/fias/import
+
+# --------------------------------------------------------------------------
+#  Именованный volume для данных Postgres (хранится Docker'ом на хосте).
+# --------------------------------------------------------------------------
+volumes:
+  postgres-data:

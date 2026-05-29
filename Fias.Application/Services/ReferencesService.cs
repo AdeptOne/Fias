@@ -1,45 +1,45 @@
+using Dapper;
 using Fias.Application.Abstractions;
 using Fias.Application.Models;
-using Microsoft.EntityFrameworkCore;
 
 namespace Fias.Application.Services;
 
-public class ReferencesService(IFiasDbContext db) : IReferencesService
+public class ReferencesService(ISqlConnectionFactory factory) : IReferencesService
 {
-    public async Task<IReadOnlyList<LevelDto>> GetLevelsAsync(CancellationToken ct) =>
-        await db.ObjectLevels.AsNoTracking()
-            .Where(l => l.IsActive == true)
-            .OrderBy(l => l.Level)
-            .Select(l => new LevelDto(l.Level, l.Name, l.ShortName))
-            .ToListAsync(ct);
+    // Колонки fias.* без подчёркиваний (shortname/levelid) — Dapper матчит их на свойства
+    // DTO регистронезависимо, поэтому алиасы не нужны.
+    public async Task<IReadOnlyList<LevelDto>> GetLevelsAsync(CancellationToken ct)
+    {
+        await using var conn = await factory.OpenAsync(ct);
+        var rows = await conn.QueryAsync<LevelDto>(new CommandDefinition(
+            "SELECT level, name, shortname FROM fias.object_levels WHERE isactive = true ORDER BY level",
+            cancellationToken: ct));
+        return rows.AsList();
+    }
 
     public async Task<IReadOnlyList<TypeDto>> GetAddressObjectTypesAsync(int? level, CancellationToken ct)
     {
-        var q = db.AddressObjectTypes.AsNoTracking().Where(t => t.IsActive == true);
-        if (level is { } lvl) q = q.Where(t => t.Level == lvl);
-        return await q.OrderBy(t => t.Level).ThenBy(t => t.ShortName)
-            .Select(t => new TypeDto(t.Id, t.Level, t.Name, t.ShortName))
-            .ToListAsync(ct);
+        const string sql = """
+            SELECT id, level, name, shortname
+            FROM fias.addressobject_types
+            WHERE isactive = true AND (@level::int IS NULL OR level = @level)
+            ORDER BY level, shortname
+            """;
+        await using var conn = await factory.OpenAsync(ct);
+        var rows = await conn.QueryAsync<TypeDto>(new CommandDefinition(sql, new { level }, cancellationToken: ct));
+        return rows.AsList();
     }
 
-    public async Task<IReadOnlyList<TypeDto>> GetHouseTypesAsync(CancellationToken ct) =>
-        await db.HouseTypes.AsNoTracking()
-            .Where(t => t.IsActive == true)
-            .OrderBy(t => t.Id)
-            .Select(t => new TypeDto(t.Id, null, t.Name, t.ShortName))
-            .ToListAsync(ct);
+    public Task<IReadOnlyList<TypeDto>> GetHouseTypesAsync(CancellationToken ct) => SimpleTypesAsync("fias.house_types", ct);
+    public Task<IReadOnlyList<TypeDto>> GetApartmentTypesAsync(CancellationToken ct) => SimpleTypesAsync("fias.apartment_types", ct);
+    public Task<IReadOnlyList<TypeDto>> GetRoomTypesAsync(CancellationToken ct) => SimpleTypesAsync("fias.room_types", ct);
 
-    public async Task<IReadOnlyList<TypeDto>> GetApartmentTypesAsync(CancellationToken ct) =>
-        await db.ApartmentTypes.AsNoTracking()
-            .Where(t => t.IsActive == true)
-            .OrderBy(t => t.Id)
-            .Select(t => new TypeDto(t.Id, null, t.Name, t.ShortName))
-            .ToListAsync(ct);
-
-    public async Task<IReadOnlyList<TypeDto>> GetRoomTypesAsync(CancellationToken ct) =>
-        await db.RoomTypes.AsNoTracking()
-            .Where(t => t.IsActive == true)
-            .OrderBy(t => t.Id)
-            .Select(t => new TypeDto(t.Id, null, t.Name, t.ShortName))
-            .ToListAsync(ct);
+    /// <summary>Справочники без уровня (дома/помещения/комнаты): level отдаём как NULL.</summary>
+    private async Task<IReadOnlyList<TypeDto>> SimpleTypesAsync(string table, CancellationToken ct)
+    {
+        var sql = $"SELECT id, NULL::int AS level, name, shortname FROM {table} WHERE isactive = true ORDER BY id";
+        await using var conn = await factory.OpenAsync(ct);
+        var rows = await conn.QueryAsync<TypeDto>(new CommandDefinition(sql, cancellationToken: ct));
+        return rows.AsList();
+    }
 }

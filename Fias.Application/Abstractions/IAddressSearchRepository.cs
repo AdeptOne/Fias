@@ -1,25 +1,21 @@
+using Fias.Application.Search;
+
 namespace Fias.Application.Abstractions;
 
 /// <summary>
-/// Репозиторий нечёткого поиска. Прячет за собой провайдер-специфичные функции
-/// (например, pg_trgm similarity), чтобы Application не зависел от EF.Functions.
+/// Репозиторий гибридного поиска адресов. Скрывает за собой сырой SQL (Dapper) и
+/// провайдер-специфику PostgreSQL: полнотекстовый поиск (tsvector/ts_rank) + триграммы
+/// (pg_trgm/similarity), а также поуровневое сужение по дереву adm_hierarchy.
 /// </summary>
 public interface IAddressSearchRepository
 {
-    Task<IReadOnlyList<AddressSearchHit>> SearchByNameAsync(
-        string query,
-        int limit,
-        double threshold,
-        int? levelFilter,
-        IReadOnlyCollection<long>? restrictToObjectIds,
-        CancellationToken ct);
-}
+    /// <summary>
+    /// Выполнить гибридный поиск по разобранному запросу. Внутри — двухфазная логика:
+    /// сначала резолвится контейнер (регион/город), затем улица/дом ищутся строго в его
+    /// поддереве, чтобы не сканировать всю базу ГАР.
+    /// </summary>
+    Task<IReadOnlyList<AddressResult>> SearchAsync(ParsedAddressQuery query, CancellationToken ct);
 
-/// <summary>Сырая строка результата поиска до построения адресной строки.</summary>
-public record AddressSearchHit(
-    long ObjectId,
-    Guid? ObjectGuid,
-    int? Level,
-    string? Name,
-    string? TypeName,
-    double Similarity);
+    /// <summary>Прямой резолв объекта по FIAS GUID из проекции (адресообразующий объект или дом).</summary>
+    Task<AddressResult?> GetByGuidAsync(Guid guid, CancellationToken ct);
+}
