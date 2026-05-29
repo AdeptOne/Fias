@@ -6,7 +6,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Fias.Api", "Fias.Api\Fias.A
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{94A12A72-3326-4315-B1A5-0B117FBE71FC}"
 	ProjectSection(SolutionItems) = preProject
-		compose.yaml = compose.yaml
+		docker-compose.yml = docker-compose.yml
+		docker\postgres\init\01-init-extensions.sql = docker\postgres\init\01-init-extensions.sql
+		.env = .env
+		.env.example = .env.example
 	EndProjectSection
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Fias.Service.Updater", "Fias.Service.Updater\Fias.Service.Updater.csproj", "{C9155D77-7DDE-4407-AB03-B247A57F8249}"

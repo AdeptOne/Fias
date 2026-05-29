@@ -6,3 +6,6 @@ riderModule.iml
 .idea/
 *.user
 /fias-import/
+
+# Локальные секреты docker-compose (коммитим только .env.example)
+.env

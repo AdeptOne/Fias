@@ -4,6 +4,7 @@ using Fias.Service.Updater.Services.Downloading;
 using Fias.Service.Updater.Services.Importing;
 using Fias.Service.Updater.Services.Progress;
 using Fias.Service.Updater.Services.Schema;
+using Fias.Service.Updater.Services.Search;
 using Fias.Service.Updater.Services.State;
 using Microsoft.Extensions.Options;
 
@@ -21,6 +22,7 @@ public class FiasImportOrchestrator(
     IFiasDownloader downloader,
     IFiasArchiveReader archiveReader,
     IFiasEntityImporterRegistry importers,
+    ISearchProjectionBuilder searchProjection,
     IFiasVersionStore versionStore,
     IOptions<FiasOptions> options,
     ILogger<FiasImportOrchestrator> logger) : IFiasImportOrchestrator
@@ -39,6 +41,9 @@ public class FiasImportOrchestrator(
         await migrator.TruncateAllAsync(ct);
 
         await ProcessArchiveAsync(zipPath, ImportMode.Full, progress, ct);
+
+        // Денормализованную проекцию для поиска собираем после заливки сырых данных.
+        await searchProjection.RebuildAsync(progress, ct);
 
         var info = await fnsClient.GetLastAsync(ct);
         await versionStore.SetVersionAsync(info, ct);
@@ -71,6 +76,10 @@ public class FiasImportOrchestrator(
         logger.LogInformation("Применение дельты {From} → {To} из {Path}", current, info.VersionId, zipPath);
 
         await ProcessArchiveAsync(zipPath, ImportMode.Delta, progress, ct);
+
+        // После дельты пересобираем проекцию целиком (v1) — гарантированно консистентно.
+        await searchProjection.RebuildAsync(progress, ct);
+
         await versionStore.SetVersionAsync(info, ct);
 
         progress.WriteLine($"Дельта применена, версия {info.VersionId}");

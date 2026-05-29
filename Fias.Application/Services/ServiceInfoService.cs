@@ -1,27 +1,26 @@
+using Dapper;
 using Fias.Application.Abstractions;
 using Fias.Application.Models;
-using Microsoft.EntityFrameworkCore;
 
 namespace Fias.Application.Services;
 
-public class ServiceInfoService(IFiasDbContext db, IFiasVersionProvider version) : IServiceInfoService
+public class ServiceInfoService(ISqlConnectionFactory factory, IFiasVersionProvider version) : IServiceInfoService
 {
     public Task<VersionDto> GetVersionAsync(CancellationToken ct) => version.GetAsync(ct);
 
     public async Task<StatsDto> GetStatsAsync(CancellationToken ct)
     {
-        // Подсчёт активных записей. EF Core транслирует Count() в COUNT(*).
-        var addressObjects = await db.AddressObjects.AsNoTracking()
-            .CountAsync(a => a.IsActual == true && a.IsActive == true, ct);
-        var houses = await db.Houses.AsNoTracking()
-            .CountAsync(h => h.IsActual == true && h.IsActive == true, ct);
-        var apartments = await db.Apartments.AsNoTracking()
-            .CountAsync(a => a.IsActual == true && a.IsActive == true, ct);
-        var rooms = await db.Rooms.AsNoTracking()
-            .CountAsync(r => r.IsActual == true && r.IsActive == true, ct);
-        var regions = await db.AddressObjects.AsNoTracking()
-            .CountAsync(a => a.Level == 1 && a.IsActual == true && a.IsActive == true, ct);
+        // Один запрос с подзапросами-счётчиками вместо пяти отдельных COUNT.
+        const string sql = """
+            SELECT
+                (SELECT count(*) FROM fias.addressobjects WHERE isactual = true AND isactive = true)                AS "AddressObjects",
+                (SELECT count(*) FROM fias.houses         WHERE isactual = true AND isactive = true)                AS "Houses",
+                (SELECT count(*) FROM fias.apartments     WHERE isactual = true AND isactive = true)                AS "Apartments",
+                (SELECT count(*) FROM fias.rooms          WHERE isactual = true AND isactive = true)                AS "Rooms",
+                (SELECT count(*) FROM fias.addressobjects WHERE level = 1 AND isactual = true AND isactive = true)  AS "Regions"
+            """;
 
-        return new StatsDto(addressObjects, houses, apartments, rooms, regions);
+        await using var conn = await factory.OpenAsync(ct);
+        return await conn.QueryFirstAsync<StatsDto>(new CommandDefinition(sql, cancellationToken: ct));
     }
 }

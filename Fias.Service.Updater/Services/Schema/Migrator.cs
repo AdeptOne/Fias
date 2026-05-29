@@ -257,5 +257,83 @@ public class Migrator(INpgsqlConnectionFactory factory, ILogger<Migrator> logger
                 CREATE INDEX ix_params_objectid_typeid ON fias.params(objectid, typeid);
             END IF;
         END $$;
+
+        -- =====================================================================
+        --  Денормализованный поисковый слой (schema search). Чистый snake_case.
+        --  Плоские таблицы наполняются ПОСЛЕ импорта (SearchProjectionBuilder).
+        --  Поиск читает только их — без JOIN по сырым fias.* и без обхода дерева.
+        -- =====================================================================
+        CREATE SCHEMA IF NOT EXISTS search;
+
+        -- Справочник типов адресообразующих элементов (для отображения/фильтров).
+        CREATE TABLE IF NOT EXISTS search.address_object_types (
+            id          integer PRIMARY KEY,
+            level       integer,
+            short_name  text,
+            name        text
+        );
+
+        -- Регионы/города/улицы: имя + денормализованный полный путь + FTS-вектор.
+        CREATE TABLE IF NOT EXISTS search.address_objects (
+            object_id         bigint PRIMARY KEY,
+            object_guid       uuid,
+            parent_object_id  bigint,      -- непосредственный родитель в адм. дереве
+            parent_guid       uuid,
+            region_object_id  bigint,      -- корень пути (субъект РФ) — для приоритета/фильтра
+            path              text,        -- денормализованный путь (objectid.objectid…) для сужения поддерева
+            level             integer,
+            type_name         text,
+            name              text,
+            full_name         text,        -- денормализованная полная адресная строка (для отображения)
+            -- Реквизиты объекта (из fias.params) — для инлайн-выдачи в стиле DaData.
+            region_code       integer,
+            postal_code       text,
+            okato             text,
+            oktmo             text,
+            ifns_ul           text,
+            ifns_fl           text,
+            kladr_code        text,
+            -- Структурный сплит адреса (имена предков по уровням ГАР).
+            region            text,
+            area              text,
+            city              text,
+            settlement        text,
+            street            text,
+            name_tsv          tsvector GENERATED ALWAYS AS (to_tsvector('russian', coalesce(name, ''))) STORED
+        );
+
+        -- Дома, привязанные к parent_object_id/parent_guid (улица/нас. пункт).
+        CREATE TABLE IF NOT EXISTS search.houses (
+            object_id         bigint PRIMARY KEY,
+            object_guid       uuid,
+            parent_object_id  bigint,
+            parent_guid       uuid,
+            path              text,
+            house_num         text,
+            add_num1          text,
+            add_num2          text,
+            house_type        integer,
+            add_type1         integer,
+            add_type2         integer,
+            full_name         text,
+            -- Реквизиты дома (из fias.params).
+            region_code       integer,
+            postal_code       text,
+            okato             text,
+            oktmo             text,
+            ifns_ul           text,
+            ifns_fl           text,
+            kladr_code        text,
+            -- Структурный сплит наследуется от родителя (улицы/нас. пункта); house = house_num.
+            region            text,
+            area              text,
+            city              text,
+            settlement        text,
+            street            text
+        );
+
+        -- Вторичные индексы search.* НЕ создаём здесь: их строит SearchProjectionBuilder
+        -- после массовой загрузки (drop → INSERT → create), чтобы не платить за поддержку
+        -- GiST/GIN на каждой вставке. Здесь — только таблицы и PK.
         """;
 }

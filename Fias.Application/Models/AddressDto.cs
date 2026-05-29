@@ -63,7 +63,25 @@ public record AddressDto(
 public record AddressListResponse(
     [property: JsonPropertyName("addresses")] IReadOnlyList<AddressDto> Addresses);
 
-/// <summary>Запись в результате поиска.</summary>
+/// <summary>Структурированные данные адреса для инлайн-выдачи (формат, близкий к DaData).</summary>
+public record AddressDataDto(
+    [property: JsonPropertyName("fias_id")] Guid? FiasId,
+    [property: JsonPropertyName("fias_level"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? FiasLevel,
+    [property: JsonPropertyName("region_code"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? RegionCode,
+    [property: JsonPropertyName("region"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Region,
+    [property: JsonPropertyName("area"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Area,
+    [property: JsonPropertyName("city"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? City,
+    [property: JsonPropertyName("settlement"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Settlement,
+    [property: JsonPropertyName("street"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Street,
+    [property: JsonPropertyName("house"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? House,
+    [property: JsonPropertyName("postal_code"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? PostalCode,
+    [property: JsonPropertyName("kladr_id"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? KladrId,
+    [property: JsonPropertyName("okato"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Okato,
+    [property: JsonPropertyName("oktmo"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Oktmo,
+    [property: JsonPropertyName("tax_office"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? TaxOffice,        // ИФНС ФЛ
+    [property: JsonPropertyName("tax_office_legal"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? TaxOfficeLegal); // ИФНС ЮЛ
+
+/// <summary>Запись в результате поиска. <see cref="Data"/> — структурный разбор в стиле DaData.</summary>
 public record AddressSearchResultDto(
     long ObjectId,
     Guid? ObjectGuid,
@@ -71,7 +89,8 @@ public record AddressSearchResultDto(
     string? Name,
     string FullName,
     string Address,
-    double Similarity);
+    double Similarity,
+    [property: JsonPropertyName("data"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] AddressDataDto? Data = null);
 
 /// <summary>Дочерний элемент иерархии.</summary>
 public record AddressChildDto(
