@@ -1,4 +1,4 @@
-using Fias.Service.Updater.Jobs;
+using Fias.Application.Services;
 using Fias.Service.Updater.Services.Schema;
 using Hangfire;
 
@@ -27,18 +27,17 @@ public class Worker(
 
         // Полная загрузка запускается вручную из Hangfire Dashboard (Trigger now).
         // При пустом localZipPath оркестратор сам решит: локальный файл из ImportDirectory или скачать с ФНС.
-        // Регистрируем перегрузки с PerformContext (null заменяется Hangfire'ом на актуальный
-        // контекст) — это даёт прогресс в Console-вкладке Dashboard при «Trigger now».
-        jobs.AddOrUpdate<FiasUpdateJob>(
+        // Регистрируем recurring job'ы через интерфейс — очередь fias подхватывается из
+        // [Queue] атрибута на IFiasUpdateJob, поэтому повторы/расписания не сваливаются
+        // в default.
+        jobs.AddOrUpdate<IFiasUpdateJob>(
             "full-data-import",
-            "fias",
-            j => j.RunFullAsync(null, null!, CancellationToken.None),
+            j => j.RunFullAsync(null, CancellationToken.None),
             Cron.Never());
 
-        jobs.AddOrUpdate<FiasUpdateJob>(
+        jobs.AddOrUpdate<IFiasUpdateJob>(
             "delta-data-import",
-            "fias",
-            j => j.RunDeltaAsync(null!, CancellationToken.None),
+            j => j.RunDeltaAsync(CancellationToken.None),
             Cron.Daily(3));
     }
 }

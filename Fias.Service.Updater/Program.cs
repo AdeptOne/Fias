@@ -9,7 +9,6 @@ using Fias.Service.Updater.Services.Importing;
 using Fias.Service.Updater.Services.Schema;
 using Fias.Service.Updater.Services.State;
 using Hangfire;
-using Hangfire.Console;
 using Hangfire.PostgreSql;
 
 var builder = Host.CreateApplicationBuilder(args);
@@ -25,19 +24,19 @@ builder.Services.AddHangfire(cfg =>
     {
         opt.UseNpgsqlConnection(builder.Configuration.GetConnectionString("Default"));
     });
-    cfg.UseConsole();
 });
+
+builder.Services.AddHangfireServer(opt => opt.WorkerCount = 2);
 
 builder.Services.AddHangfireServer(opt =>
 {
     opt.WorkerCount = 2;
-    opt.Queues = ["fias"];
+    opt.Queues = [Fias.Application.Services.FiasJobQueues.Fias];
 });
 
 builder.Services.AddSingleton<INpgsqlConnectionFactory, NpgsqlConnectionFactory>();
 builder.Services.AddSingleton<IFiasArchiveReader, FiasArchiveReader>();
-// Orchestrator зависит от typed-HttpClient'ов (Transient) — он сам должен быть Scoped,
-// иначе DI поймает captive dependency при validateScopes=true.
+
 builder.Services.AddScoped<IMigrator, Migrator>();
 builder.Services.AddScoped<IFiasVersionStore, FiasVersionStore>();
 builder.Services.AddScoped<IFiasImportOrchestrator, FiasImportOrchestrator>();

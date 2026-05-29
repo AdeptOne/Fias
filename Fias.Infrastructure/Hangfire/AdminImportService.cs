@@ -12,15 +12,13 @@ namespace Fias.Infrastructure.Hangfire;
 /// </summary>
 public class AdminImportService(IBackgroundJobClient jobs) : IAdminImportService
 {
-    private const string Queue = "fias";
-
     public AdminImportResponse EnqueueFull(AdminImportRequest request)
     {
         var localZipPath = string.IsNullOrWhiteSpace(request.LocalZipPath) ? null : request.LocalZipPath.Trim();
         var jobId = jobs.Create(
             global::Hangfire.Common.Job.FromExpression<IFiasUpdateJob>(
                 j => j.RunFullAsync(localZipPath, CancellationToken.None)),
-            new EnqueuedState(Queue));
+            new EnqueuedState(FiasJobQueues.Fias));
         return new AdminImportResponse(jobId);
     }
 
@@ -29,7 +27,7 @@ public class AdminImportService(IBackgroundJobClient jobs) : IAdminImportService
         var jobId = jobs.Create(
             global::Hangfire.Common.Job.FromExpression<IFiasUpdateJob>(
                 j => j.RunDeltaAsync(CancellationToken.None)),
-            new EnqueuedState(Queue));
+            new EnqueuedState(FiasJobQueues.Fias));
         return new AdminImportResponse(jobId);
     }
 }

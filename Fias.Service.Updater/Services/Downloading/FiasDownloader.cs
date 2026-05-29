@@ -58,7 +58,13 @@ public class FiasDownloader(
 
         var total = response.Content.Headers.ContentLength;
         await using (var src = await response.Content.ReadAsStreamAsync(ct))
-        await using (var dst = File.Create(tempPath))
+        await using (var dst = new FileStream(
+                         tempPath,
+                         FileMode.Create,
+                         FileAccess.Write,
+                         FileShare.None,
+                         bufferSize: 1 << 20,            // 1 МБ disk-буфер
+                         useAsync: true))
         {
             await CopyWithProgressAsync(src, dst, total, targetPath, progress, ct);
         }
@@ -71,22 +77,23 @@ public class FiasDownloader(
     }
 
     /// <summary>
-    /// Копирует поток буферами по 80 КБ. Прогресс пишется в IProgressSink (Hangfire.Console
-    /// или ILogger). Раз в 3 секунды или каждые 50 МБ — текстовая строка, на каждом батче —
-    /// обновление progress-bar (если Content-Length известен).
+    /// Копирует поток буферами по 1 МБ. Прогресс-бар и WriteLine обновляются ВМЕСТЕ
+    /// и не чаще, чем раз в 3 секунды или каждые 50 МБ — каждое SetValue Hangfire.Console
+    /// делает INSERT в Postgres, и слишком частые вызовы (на каждом мелком батче)
+    /// душат пропускную способность скачивания на многогигабайтных файлах.
     /// </summary>
     private static async Task CopyWithProgressAsync(
         Stream src, Stream dst, long? total, string targetPath, IProgressSink progress, CancellationToken ct)
     {
-        const int bufferSize = 81_920;
-        const long logEveryBytes = 50L * 1024 * 1024;
-        var logEveryInterval = TimeSpan.FromSeconds(3);
+        const int bufferSize = 1 << 20;                  // 1 МБ — крупнее системные вызовы
+        const long reportEveryBytes = 50L * 1024 * 1024;
+        var reportEveryInterval = TimeSpan.FromSeconds(3);
 
         var buffer = new byte[bufferSize];
         long copied = 0;
-        long lastLoggedBytes = 0;
+        long lastReportedBytes = 0;
         var started = DateTime.UtcNow;
-        var lastLoggedAt = started;
+        var lastReportedAt = started;
         var fileName = Path.GetFileName(targetPath);
 
         var bar = total is { } sizeForBar && sizeForBar > 0
@@ -99,36 +106,32 @@ public class FiasDownloader(
             await dst.WriteAsync(buffer.AsMemory(0, read), ct);
             copied += read;
 
-            if (bar is not null && total is { } t)
-                bar.SetValue(copied * 100d / t);
-
             var now = DateTime.UtcNow;
-            if (copied - lastLoggedBytes >= logEveryBytes || now - lastLoggedAt >= logEveryInterval)
+            if (copied - lastReportedBytes < reportEveryBytes && now - lastReportedAt < reportEveryInterval)
+                continue;
+
+            var elapsed = now - started;
+            var speedMBs = elapsed.TotalSeconds > 0
+                ? copied / (1024d * 1024d) / elapsed.TotalSeconds
+                : 0;
+
+            if (total is { } known && known > 0)
             {
-                var elapsed = now - started;
-                var speedMBs = elapsed.TotalSeconds > 0
-                    ? copied / (1024d * 1024d) / elapsed.TotalSeconds
-                    : 0;
-
-                string line;
-                if (total is { } known && known > 0)
-                {
-                    var percent = copied * 100d / known;
-                    var eta = speedMBs > 0 ? (known - copied) / (speedMBs * 1024 * 1024) : 0;
-                    line = $"{fileName}: {copied:N0} / {known:N0} байт ({percent:F1}%), {speedMBs:F1} MB/s, ETA {eta:F0}s";
-                }
-                else
-                {
-                    line = $"{fileName}: {copied:N0} байт, {speedMBs:F1} MB/s";
-                }
-                progress.WriteLine(line);
-
-                lastLoggedBytes = copied;
-                lastLoggedAt = now;
+                var percent = copied * 100d / known;
+                var eta = speedMBs > 0 ? (known - copied) / (speedMBs * 1024 * 1024) : 0;
+                progress.WriteLine(
+                    $"{fileName}: {copied:N0} / {known:N0} байт ({percent:F1}%), {speedMBs:F1} MB/s, ETA {eta:F0}s");
+                bar?.SetValue(percent);
             }
+            else
+            {
+                progress.WriteLine($"{fileName}: {copied:N0} байт, {speedMBs:F1} MB/s");
+            }
+
+            lastReportedBytes = copied;
+            lastReportedAt = now;
         }
 
-        if (bar is not null && total is { })
-            bar.SetValue(100);
+        bar?.SetValue(100);
     }
 }

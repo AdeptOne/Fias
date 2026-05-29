@@ -3,7 +3,6 @@ using Fias.Api.Auth;
 using Fias.Application;
 using Fias.Infrastructure;
 using Hangfire;
-using Hangfire.Console;
 using Hangfire.PostgreSql;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authorization;
@@ -109,7 +108,6 @@ builder.Services.AddHangfire(cfg =>
     {
         opt.UseNpgsqlConnection(builder.Configuration.GetConnectionString("Default"));
     });
-    cfg.UseConsole();
 });
 
 // Намеренно не вызываем AddHangfireServer — обработка job'ов живёт в Fias.Service.Updater.
