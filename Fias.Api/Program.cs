@@ -2,6 +2,8 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading.RateLimiting;
 using Fias.Api.Auth;
+using Fias.Api.Health;
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Fias.Application;
 using Fias.Infrastructure;
 using Hangfire;
@@ -69,6 +71,12 @@ builder.Services.AddControllers().AddJsonOptions(o =>
     o.JsonSerializerOptions.DictionaryKeyPolicy = JsonNamingPolicy.SnakeCaseLower;
     o.JsonSerializerOptions.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull;
 });
+// Readiness: Api не должен отдавать трафик, пока БД и поисковая проекция не готовы
+// (схему/наполнение создаёт Updater). Liveness — что процесс жив.
+builder.Services.AddHealthChecks()
+    .AddCheck<DatabaseHealthCheck>("db", tags: ["ready"])
+    .AddCheck<SearchProjectionHealthCheck>("search_projection", tags: ["ready"]);
+
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
 {
@@ -148,5 +156,11 @@ app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
+
+// Liveness — процесс жив (без проверок зависимостей). Readiness — БД + проекция готовы.
+app.MapHealthChecks("/health/live", new HealthCheckOptions { Predicate = _ => false })
+    .AllowAnonymous().DisableRateLimiting();
+app.MapHealthChecks("/health/ready", new HealthCheckOptions { Predicate = r => r.Tags.Contains("ready") })
+    .AllowAnonymous().DisableRateLimiting();
 
 app.Run();

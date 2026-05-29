@@ -25,6 +25,7 @@ public sealed class SearchPipelineTests(PostgresFixture fixture)
     {
         var migrator = new Migrator(fixture.Factory, NullLogger<Migrator>.Instance);
         await migrator.EnsureSchemaAsync(default);
+        await migrator.TruncateAllAsync(default); // фикстура одна на коллекцию — сид должен быть чистым
 
         await using (var conn = await fixture.Factory.OpenAsync(default))
         {

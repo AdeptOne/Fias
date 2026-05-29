@@ -149,8 +149,8 @@ public sealed class AddressSearchRepository(NpgsqlDataSource dataSource) : IAddr
             WITH q AS (SELECT plainto_tsquery('russian', @term) AS tsq),
             cand AS (
                 SELECT a.*,
-                       ts_rank(a.name_tsv, q.tsq) AS fts_rank,
-                       similarity(a.name, @term)  AS trgm_sim,
+                       ts_rank(a.name_tsv, q.tsq)::float8 AS fts_rank,
+                       similarity(a.name, @term)::float8  AS trgm_sim,
                        (a.name_tsv @@ q.tsq)      AS fts_match,
                        (a.name % @term)           AS trgm_match
                 FROM search.address_objects a
@@ -185,7 +185,7 @@ public sealed class AddressSearchRepository(NpgsqlDataSource dataSource) : IAddr
                    street      AS "Street",
                    fts_rank    AS "FtsRank",
                    trgm_sim    AS "TrgmSimilarity",
-                   {RrfScoreExpr} AS "Score"
+                   ({RrfScoreExpr})::float8 AS "Score"
             FROM ranked
             ORDER BY "Score" DESC
             LIMIT @limit
@@ -228,13 +228,13 @@ public sealed class AddressSearchRepository(NpgsqlDataSource dataSource) : IAddr
                    settlement                                  AS "Settlement",
                    street                                      AS "Street",
                    0::float8                                   AS "FtsRank",
-                   similarity(house_num, @num)                 AS "TrgmSimilarity",
+                   similarity(house_num, @num)::float8         AS "TrgmSimilarity",
                    ( CASE WHEN lower(house_num) = @numLower THEN 1.0
                           ELSE similarity(house_num, @num) END
                      + CASE WHEN @buildingLower IS NOT NULL
                                  AND (lower(add_num1) = @buildingLower OR lower(add_num2) = @buildingLower)
                             THEN 0.25 ELSE 0 END
-                   )                                           AS "Score"
+                   )::float8                                   AS "Score"
             FROM search.houses
             WHERE house_num IS NOT NULL
               AND (@parentObjectId::bigint IS NULL OR parent_object_id = @parentObjectId)
