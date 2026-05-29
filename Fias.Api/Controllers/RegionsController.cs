@@ -13,7 +13,7 @@ public class RegionsController(IHierarchyService hierarchy) : ControllerBase
 {
     /// <summary>Все субъекты РФ (level=1), активные.</summary>
     [HttpGet]
-    [ProducesResponseType(typeof(IReadOnlyList<RegionDto>), StatusCodes.Status200OK)]
-    public async Task<ActionResult<IReadOnlyList<RegionDto>>> GetAll(CancellationToken ct)
-        => Ok(await hierarchy.GetRegionsAsync(ct));
+    [ProducesResponseType(typeof(ListResponse<RegionDto>), StatusCodes.Status200OK)]
+    public async Task<ActionResult<ListResponse<RegionDto>>> GetAll(CancellationToken ct)
+        => Ok(new ListResponse<RegionDto>(await hierarchy.GetRegionsAsync(ct)));
 }

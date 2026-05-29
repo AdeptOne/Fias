@@ -12,24 +12,16 @@ namespace Fias.Api.Controllers;
 [Produces("application/json")]
 public class SuggestController(IAddressSearchService search) : ControllerBase
 {
-    /// <summary>Автокомплит адреса. Фильтры уровней (from_bound/to_bound) и области (region_code/parent_id).</summary>
-    /// <param name="query">Строка ввода (минимум 2 символа).</param>
-    /// <param name="count">Максимум подсказок, 1..20.</param>
-    /// <param name="fromBound">Нижняя граница уровня: region|area|city|settlement|street|house|flat.</param>
-    /// <param name="toBound">Верхняя граница уровня (тех же значений).</param>
-    /// <param name="regionCode">Ограничение кодом субъекта РФ.</param>
-    /// <param name="parentId">Ограничение поддеревом OBJECTID.</param>
+    /// <summary>Автокомплит адреса. Принимает строку адреса ИЛИ FIAS GUID — больше ничего не нужно.</summary>
+    /// <param name="query">Адрес или FIAS GUID (минимум 2 символа).</param>
+    /// <param name="limit">Максимум подсказок, 1..20.</param>
     [HttpGet("address")]
-    [ProducesResponseType(typeof(SuggestionsResponse), StatusCodes.Status200OK)]
-    public async Task<ActionResult<SuggestionsResponse>> Address(
+    [ProducesResponseType(typeof(ListResponse<SuggestionDto>), StatusCodes.Status200OK)]
+    public async Task<ActionResult<ListResponse<SuggestionDto>>> Address(
         [FromQuery] string query,
-        [FromQuery] int count = 10,
-        [FromQuery(Name = "from_bound")] string? fromBound = null,
-        [FromQuery(Name = "to_bound")] string? toBound = null,
-        [FromQuery(Name = "region_code")] int? regionCode = null,
-        [FromQuery(Name = "parent_id")] long? parentId = null,
+        [FromQuery] int limit = 10,
         CancellationToken ct = default)
-        => Ok(await search.SuggestAsync(query, count, fromBound, toBound, regionCode, parentId, ct));
+        => Ok(new ListResponse<SuggestionDto>(await search.SuggestAsync(query, limit, ct)));
 
     /// <summary>Резолв адреса по FIAS GUID — один элемент того же формата.</summary>
     [HttpGet("address/{fiasId:guid}")]

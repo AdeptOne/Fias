@@ -59,10 +59,6 @@ public record AddressDto(
     [property: JsonPropertyName("federal_district"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] FederalDistrictDto? FederalDistrict,
     [property: JsonPropertyName("hierarchy_place")] int HierarchyPlace);
 
-/// <summary>Обёртка-ответ со списком адресов: { "addresses": [...] }.</summary>
-public record AddressListResponse(
-    [property: JsonPropertyName("addresses")] IReadOnlyList<AddressDto> Addresses);
-
 /// <summary>Структурированные данные адреса для инлайн-выдачи (формат, близкий к DaData).</summary>
 public record AddressDataDto(
     [property: JsonPropertyName("fias_id")] Guid? FiasId,
@@ -104,10 +100,6 @@ public record SuggestionDto(
     [property: JsonPropertyName("value")] string Value,
     [property: JsonPropertyName("unrestricted_value")] string UnrestrictedValue,
     [property: JsonPropertyName("data")] AddressDataDto Data);
-
-/// <summary>Ответ саджеста: { "suggestions": [...] }.</summary>
-public record SuggestionsResponse(
-    [property: JsonPropertyName("suggestions")] IReadOnlyList<SuggestionDto> Suggestions);
 
 /// <summary>Результат стандартизации строки: лучший разбор + код качества и уверенность.</summary>
 public record CleanResultDto(

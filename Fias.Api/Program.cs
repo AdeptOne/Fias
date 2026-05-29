@@ -1,3 +1,5 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Threading.RateLimiting;
 using Fias.Api.Auth;
 using Fias.Application;
@@ -59,7 +61,14 @@ builder.Services.AddProblemDetails(opt =>
     };
 });
 
-builder.Services.AddControllers();
+// Единый формат JSON во всём API: snake_case и опускание null-полей. Снимает разнобой между
+// DTO с явными [JsonPropertyName] и без них (раньше часть ответов уходила camelCase).
+builder.Services.AddControllers().AddJsonOptions(o =>
+{
+    o.JsonSerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower;
+    o.JsonSerializerOptions.DictionaryKeyPolicy = JsonNamingPolicy.SnakeCaseLower;
+    o.JsonSerializerOptions.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull;
+});
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
 {

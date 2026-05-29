@@ -13,7 +13,7 @@ public class LevelsController(IReferencesService refs) : ControllerBase
 {
     /// <summary>Справочник уровней объектов адресации (OBJECT_LEVELS).</summary>
     [HttpGet]
-    [ProducesResponseType(typeof(IReadOnlyList<LevelDto>), StatusCodes.Status200OK)]
-    public async Task<ActionResult<IReadOnlyList<LevelDto>>> GetAll(CancellationToken ct)
-        => Ok(await refs.GetLevelsAsync(ct));
+    [ProducesResponseType(typeof(ListResponse<LevelDto>), StatusCodes.Status200OK)]
+    public async Task<ActionResult<ListResponse<LevelDto>>> GetAll(CancellationToken ct)
+        => Ok(new ListResponse<LevelDto>(await refs.GetLevelsAsync(ct)));
 }

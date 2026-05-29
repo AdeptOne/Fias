@@ -36,53 +36,41 @@ public class AddressesController(
     /// <summary>
     /// Нечёткий поиск по наименованию (pg_trgm). Допускает опечатки.
     /// </summary>
-    /// <param name="q">Строка поиска (минимум 2 символа).</param>
-    /// <param name="limit">Максимум результатов, 1..100.</param>
-    /// <param name="threshold">Порог similarity, 0.1..1.0. Чем выше, тем строже.</param>
-    /// <param name="level">Опциональный фильтр по уровню (1=регион, 8=улица, ...).</param>
-    /// <param name="parentId">Опциональный OBJECTID родителя — ограничивает поиск его поддеревом.</param>
+    /// <param name="query">Строка: адрес или FIAS GUID (минимум 2 символа).</param>
+    /// <param name="limit">Максимум результатов.</param>
     [HttpGet("search")]
-    [ProducesResponseType(typeof(IReadOnlyList<AddressSearchResultDto>), StatusCodes.Status200OK)]
-    public async Task<ActionResult<IReadOnlyList<AddressSearchResultDto>>> Search(
-        [FromQuery] string q,
+    [ProducesResponseType(typeof(ListResponse<AddressSearchResultDto>), StatusCodes.Status200OK)]
+    public async Task<ActionResult<ListResponse<AddressSearchResultDto>>> Search(
+        [FromQuery] string query,
         [FromQuery] int limit = 20,
-        [FromQuery] double threshold = 0.3,
-        [FromQuery] int? level = null,
-        [FromQuery] long? parentId = null,
         CancellationToken ct = default)
     {
-        var results = await search.SearchAsync(q, limit, threshold, level, parentId, ct);
-        return Ok(results);
+        var results = await search.SearchAsync(query, limit, ct);
+        return Ok(new ListResponse<AddressSearchResultDto>(results));
     }
 
     /// <summary>
-    /// Нечёткий поиск с полной структурой ГАР по каждому найденному объекту.
-    /// Возвращает { "addresses": [...] } — для каждого совпадения полный адрес с иерархией,
+    /// Поиск с полной структурой ГАР по каждому найденному объекту.
+    /// Возвращает { "items": [...] } — для каждого совпадения полный адрес с иерархией,
     /// реквизитами (ОКАТО/ОКТМО/индекс/ИФНС/кадастр) и федеральным округом.
     /// </summary>
-    /// <param name="q">Строка поиска (минимум 2 символа).</param>
-    /// <param name="limit">Максимум результатов, 1..100.</param>
-    /// <param name="threshold">Порог similarity, 0.1..1.0. Чем выше, тем строже.</param>
-    /// <param name="level">Опциональный фильтр по уровню (1=регион, 8=улица, ...).</param>
-    /// <param name="parentId">Опциональный OBJECTID родителя — ограничивает поиск его поддеревом.</param>
+    /// <param name="query">Строка: адрес или FIAS GUID (минимум 2 символа).</param>
+    /// <param name="limit">Максимум результатов.</param>
     [HttpGet("search/full")]
-    [ProducesResponseType(typeof(AddressListResponse), StatusCodes.Status200OK)]
-    public async Task<ActionResult<AddressListResponse>> SearchFull(
-        [FromQuery] string q,
+    [ProducesResponseType(typeof(ListResponse<AddressDto>), StatusCodes.Status200OK)]
+    public async Task<ActionResult<ListResponse<AddressDto>>> SearchFull(
+        [FromQuery] string query,
         [FromQuery] int limit = 20,
-        [FromQuery] double threshold = 0.3,
-        [FromQuery] int? level = null,
-        [FromQuery] long? parentId = null,
         CancellationToken ct = default)
     {
-        var results = await search.SearchAddressesAsync(q, limit, threshold, level, parentId, ct);
-        return Ok(results);
+        var results = await search.SearchAddressesAsync(query, limit, ct);
+        return Ok(new ListResponse<AddressDto>(results));
     }
 
     /// <summary>Дочерние элементы адм. деления, с фильтрами по уровню и наименованию + пагинацией.</summary>
     [HttpGet("{objectId:long}/children")]
-    [ProducesResponseType(typeof(IReadOnlyList<AddressChildDto>), StatusCodes.Status200OK)]
-    public async Task<ActionResult<IReadOnlyList<AddressChildDto>>> GetChildren(
+    [ProducesResponseType(typeof(ListResponse<AddressChildDto>), StatusCodes.Status200OK)]
+    public async Task<ActionResult<ListResponse<AddressChildDto>>> GetChildren(
         long objectId,
         [FromQuery] int? level = null,
         [FromQuery] string? name = null,
@@ -91,16 +79,16 @@ public class AddressesController(
         CancellationToken ct = default)
     {
         var children = await search.GetChildrenAsync(objectId, level, name, page, pageSize, ct);
-        return Ok(children);
+        return Ok(new ListResponse<AddressChildDto>(children));
     }
 
     /// <summary>Путь к корню (хлебные крошки) от выбранного объекта.</summary>
     [HttpGet("{objectId:long}/parents")]
-    [ProducesResponseType(typeof(IReadOnlyList<AddressHierarchyItemDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ListResponse<AddressHierarchyItemDto>), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<IReadOnlyList<AddressHierarchyItemDto>>> GetParents(long objectId, CancellationToken ct)
+    public async Task<ActionResult<ListResponse<AddressHierarchyItemDto>>> GetParents(long objectId, CancellationToken ct)
     {
         var parents = await search.GetParentsAsync(objectId, ct);
-        return parents.Count == 0 ? NotFound() : Ok(parents);
+        return parents.Count == 0 ? NotFound() : Ok(new ListResponse<AddressHierarchyItemDto>(parents));
     }
 }

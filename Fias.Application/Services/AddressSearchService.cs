@@ -18,17 +18,19 @@ public class AddressSearchService(
     AddressNormalizer normalizer,
     ILogger<AddressSearchService> logger) : IAddressSearchService
 {
-    public async Task<IReadOnlyList<AddressSearchResultDto>> SearchAsync(
-        string query, int limit, double threshold, int? level, long? parentId, CancellationToken ct)
+    // Порог similarity скрыт от пользователя — разумный дефолт для триграммного фолбэка.
+    private const double DefaultThreshold = 0.3;
+    private const int HouseLevel = 10;
+
+    public async Task<IReadOnlyList<AddressSearchResultDto>> SearchAsync(string query, int limit, CancellationToken ct)
     {
         var clean = (query ?? string.Empty).Trim();
         if (clean.Length < 2)
             return Array.Empty<AddressSearchResultDto>();
 
         limit = Math.Clamp(limit, 1, 100);
-        threshold = Math.Clamp(threshold, 0.1, 1.0);
 
-        // Запрос-GUID резолвим напрямую по всем типам объектов (минуя нечёткий поиск).
+        // Запрос-GUID резолвим напрямую (минуя нечёткий поиск).
         if (Guid.TryParse(clean, out var guid))
         {
             var byGuidId = await ResolveObjectIdByGuidAsync(guid, ct);
@@ -36,19 +38,10 @@ public class AddressSearchService(
             return [await MakeResultAsync(byGuidId.Value, guid, null, null, string.Empty, 1.0, ct)];
         }
 
-        // Препроцессинг строки + параметры запроса.
-        var parsed = normalizer.Parse(clean) with
-        {
-            Limit = limit,
-            SimilarityThreshold = threshold,
-            LevelFilter = level,
-            ParentObjectId = parentId,
-        };
+        var parsed = normalizer.Parse(clean) with { Limit = limit, SimilarityThreshold = DefaultThreshold };
 
         var hits = await searchRepository.SearchAsync(parsed, ct);
-        logger.LogDebug(
-            "Поиск '{Query}' → {Count} рез. (город={City}, улица={Street}, дом={House})",
-            clean, hits.Count, parsed.RegionOrCity, parsed.Street, parsed.House);
+        logger.LogDebug("Поиск '{Query}' → {Count} рез.", clean, hits.Count);
 
         var results = new List<AddressSearchResultDto>(hits.Count);
         foreach (var hit in hits)
@@ -59,8 +52,6 @@ public class AddressSearchService(
         }
         return results;
     }
-
-    private const int HouseLevel = 10;
 
     /// <summary>Полная адресная строка из проекции (фолбэк — «тип имя»).</summary>
     private static string FullText(Search.AddressResult hit)
@@ -94,26 +85,25 @@ public class AddressSearchService(
         return new SuggestionDto(full, full, ToData(hit));
     }
 
-    public async Task<SuggestionsResponse> SuggestAsync(
-        string query, int count, string? fromBound, string? toBound, int? regionCode, long? parentId, CancellationToken ct)
+    public async Task<IReadOnlyList<SuggestionDto>> SuggestAsync(string query, int count, CancellationToken ct)
     {
         var clean = (query ?? string.Empty).Trim();
         if (clean.Length < 2)
-            return new SuggestionsResponse(Array.Empty<SuggestionDto>());
+            return Array.Empty<SuggestionDto>();
 
-        var parsed = normalizer.Parse(clean) with
+        // Если ввели FIAS GUID — резолвим напрямую (один объект), иначе обычный саджест.
+        if (Guid.TryParse(clean, out var guid))
         {
-            Limit = Math.Clamp(count, 1, 20),
-            LevelFrom = BoundToLevel(fromBound),
-            LevelTo = BoundToLevel(toBound),
-            RegionCode = regionCode,
-            ParentObjectId = parentId,
-        };
+            var single = await SuggestByGuidAsync(guid, ct);
+            return single is null ? Array.Empty<SuggestionDto>() : [single];
+        }
+
+        var parsed = normalizer.Parse(clean) with { Limit = Math.Clamp(count, 1, 20), SimilarityThreshold = DefaultThreshold };
 
         var hits = await searchRepository.SearchAsync(parsed, ct);
         var items = new List<SuggestionDto>(hits.Count);
         foreach (var hit in hits) items.Add(ToSuggestion(hit));
-        return new SuggestionsResponse(items);
+        return items;
     }
 
     public async Task<SuggestionDto?> SuggestByGuidAsync(Guid fiasId, CancellationToken ct)
@@ -139,19 +129,6 @@ public class AddressSearchService(
         var full = FullText(best);
         return new CleanResultDto(full, full, ToData(best), qc, Math.Clamp(best.Score, 0, 1));
     }
-
-    /// <summary>Имя границы DaData → уровень ГАР (приближённо; правьте под object_levels).</summary>
-    private static int? BoundToLevel(string? bound) => bound?.Trim().ToLowerInvariant() switch
-    {
-        "region" => 1,
-        "area" => 2,
-        "city" => 5,
-        "settlement" => 6,
-        "street" => 8,
-        "house" => 10,
-        "flat" => 11,
-        _ => null,
-    };
 
     /// <summary>Резолвит OBJECTID по OBJECTGUID среди всех типов объектов (адрес/дом/квартира/комната).</summary>
     private async Task<long?> ResolveObjectIdByGuidAsync(Guid guid, CancellationToken ct)
@@ -179,10 +156,9 @@ public class AddressSearchService(
             objectId, objectGuid, level, name?.Trim(), fullName, address?.FullName ?? fullName, similarity);
     }
 
-    public async Task<AddressListResponse> SearchAddressesAsync(
-        string query, int limit, double threshold, int? level, long? parentId, CancellationToken ct)
+    public async Task<IReadOnlyList<AddressDto>> SearchAddressesAsync(string query, int limit, CancellationToken ct)
     {
-        var hits = await SearchAsync(query, limit, threshold, level, parentId, ct);
+        var hits = await SearchAsync(query, limit, ct);
 
         var addresses = new List<AddressDto>(hits.Count);
         foreach (var hit in hits)
@@ -190,7 +166,7 @@ public class AddressSearchService(
             var address = await builder.BuildByObjectIdAsync(hit.ObjectId, ct);
             if (address is not null) addresses.Add(address);
         }
-        return new AddressListResponse(addresses);
+        return addresses;
     }
 
     public async Task<IReadOnlyList<AddressChildDto>> GetChildrenAsync(

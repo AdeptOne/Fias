@@ -1,6 +1,9 @@
 namespace Fias.Application.Models;
 
-/// <summary>Постраничный результат произвольного типа.</summary>
+/// <summary>Единая оболочка списка без пагинации: { "items": [...] }.</summary>
+public record ListResponse<T>(IReadOnlyList<T> Items);
+
+/// <summary>Постраничный результат: { "items": [...], "total", "page", "page_size" }.</summary>
 public record PagedResult<T>(IReadOnlyList<T> Items, int Total, int Page, int PageSize);
 
 /// <summary>Краткая запись адресообразующего элемента (без полной адресной строки).</summary>
