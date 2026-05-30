@@ -38,6 +38,28 @@ public class AddressSearchService(
         return minLen <= 6 ? 0.25 : DefaultThreshold;
     }
 
+    /// <summary>
+    /// Поиск с recall-фолбэком: если основной разбор не дал НИЧЕГО, пробуем альтернативные
+    /// интерпретации строки (<see cref="AddressNormalizer.AlternativeSplits"/>) — обратный порядок
+    /// «улица город» и случай, когда тип-слово оказалось именем улицы («Челябинск Тупик»). Срабатывает
+    /// ТОЛЬКО на пустом результате, поэтому не может ухудшить уже находимые запросы.
+    /// </summary>
+    private async Task<IReadOnlyList<Search.AddressResult>> SearchWithFallbackAsync(
+        ParsedAddressQuery parsed, CancellationToken ct)
+    {
+        var hits = await searchRepository.SearchAsync(parsed, ct);
+        if (hits.Count > 0) return hits;
+
+        foreach (var (container, street) in normalizer.AlternativeSplits(parsed))
+        {
+            var alt = parsed with { RegionOrCity = container, Street = street };
+            alt = alt with { SimilarityThreshold = AdaptiveThreshold(alt) };
+            var altHits = await searchRepository.SearchAsync(alt, ct);
+            if (altHits.Count > 0) return altHits;
+        }
+        return hits;
+    }
+
     public async Task<IReadOnlyList<AddressSearchResultDto>> SearchAsync(string query, int limit, CancellationToken ct)
     {
         var clean = (query ?? string.Empty).Trim();
@@ -57,7 +79,7 @@ public class AddressSearchService(
         var parsed = normalizer.Parse(clean);
         parsed = parsed with { Limit = limit, SimilarityThreshold = AdaptiveThreshold(parsed) };
 
-        var hits = await searchRepository.SearchAsync(parsed, ct);
+        var hits = await SearchWithFallbackAsync(parsed, ct);
         logger.LogDebug("Поиск '{Query}' → {Count} рез.", clean, hits.Count);
 
         var results = new List<AddressSearchResultDto>(hits.Count);
@@ -118,7 +140,7 @@ public class AddressSearchService(
         var parsed = normalizer.Parse(clean);
         parsed = parsed with { Limit = Math.Clamp(count, 1, 20), SimilarityThreshold = AdaptiveThreshold(parsed) };
 
-        var hits = await searchRepository.SearchAsync(parsed, ct);
+        var hits = await SearchWithFallbackAsync(parsed, ct);
         var items = new List<SuggestionDto>(hits.Count);
         foreach (var hit in hits) items.Add(ToSuggestion(hit));
         return items;
@@ -138,7 +160,7 @@ public class AddressSearchService(
 
         var parsed = normalizer.Parse(clean);
         parsed = parsed with { Limit = 1, SimilarityThreshold = AdaptiveThreshold(parsed) };
-        var hits = await searchRepository.SearchAsync(parsed, ct);
+        var hits = await SearchWithFallbackAsync(parsed, ct);
         var best = hits.Count > 0 ? hits[0] : null;
         if (best is null)
             return new CleanResultDto(null, null, null, Qc: 3, Confidence: 0);

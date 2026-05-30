@@ -97,10 +97,41 @@ public sealed partial class AddressNormalizer
             Tokens = tokens,
             RegionOrCity = NullIfEmpty(regionOrCity),
             Street = NullIfEmpty(street),
+            NameTokens = nameTokens,
             House = NullIfEmpty(house.Merged),
             HouseNum = house.Num,
             Building = house.Building,
         };
+    }
+
+    /// <summary>
+    /// Альтернативные разборы для recall-фолбэка — когда основной дал пусто. От специфичного к общему;
+    /// <see cref="Services.AddressSearchService"/> пробует их по очереди до первого непустого результата.
+    /// </summary>
+    public IEnumerable<(string? Container, string? Street)> AlternativeSplits(ParsedAddressQuery query)
+    {
+        var nt = query.NameTokens;
+        if (nt.Count < 2) yield break;
+
+        var head = nt.Take(nt.Count - 1).ToList();
+        var last = nt[^1];
+
+        if (StreetMarkers.Contains(last))
+        {
+            // Имя улицы = тип-маркер («Челябинск Тупик»): тип-слово отбросили зря. Берём последний
+            // токен как ИМЯ улицы, остальное (без маркеров) — контейнер.
+            var cont = StripMarkers(head);
+            if (cont.Count > 0)
+                yield return (string.Join(' ', cont), last);
+        }
+        else
+        {
+            // Обратный порядок «улица … город» («Ленина Новосибирск», «12-я Восточная Канашево»):
+            // контейнер — последний токен, улица — остальное.
+            var street = StripMarkers(head);
+            if (street.Count > 0)
+                yield return (last, string.Join(' ', street));
+        }
     }
 
     /// <summary>
