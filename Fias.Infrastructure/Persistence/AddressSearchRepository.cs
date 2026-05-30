@@ -298,7 +298,9 @@ public sealed class AddressSearchRepository(NpgsqlDataSource dataSource) : IAddr
                 FROM search.address_objects a
                 CROSS JOIN q
                 WHERE a.level = 8
-                  AND (a.name_tsv @@ q.tsq OR a.name % @term)
+                  -- Именно НАЗВАННАЯ улица: FTS (стемминг) либо точное равенство. БЕЗ триграммного
+                  -- %, который в этой ветке тянул близкие имена (Трудовая попадала в «труда»).
+                  AND (a.name_tsv @@ q.tsq OR lower(btrim(a.name)) = lower(@term))
             {streetFilters}
             )
             SELECT h.object_id   AS "ObjectId",
