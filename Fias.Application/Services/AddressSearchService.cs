@@ -26,7 +26,7 @@ public class AddressSearchService(
     {
         var clean = (query ?? string.Empty).Trim();
         if (clean.Length < 2)
-            return Array.Empty<AddressSearchResultDto>();
+            return [];
 
         limit = Math.Clamp(limit, 1, 100);
 
@@ -34,7 +34,7 @@ public class AddressSearchService(
         if (Guid.TryParse(clean, out var guid))
         {
             var byGuidId = await ResolveObjectIdByGuidAsync(guid, ct);
-            if (byGuidId is null) return Array.Empty<AddressSearchResultDto>();
+            if (byGuidId is null) return [];
             return [await MakeResultAsync(byGuidId.Value, guid, null, null, string.Empty, 1.0, ct)];
         }
 
@@ -200,7 +200,7 @@ public class AddressSearchService(
             cancellationToken: ct))).AsList();
 
         if (pageItems.Count == 0)
-            return Array.Empty<AddressChildDto>();
+            return [];
 
         var result = new List<AddressChildDto>(pageItems.Count);
         foreach (var id in pageItems)
@@ -216,6 +216,6 @@ public class AddressSearchService(
     public async Task<IReadOnlyList<AddressHierarchyItemDto>> GetParentsAsync(long objectId, CancellationToken ct)
     {
         var address = await builder.BuildByObjectIdAsync(objectId, ct);
-        return address?.Hierarchy ?? Array.Empty<AddressHierarchyItemDto>();
+        return address?.Hierarchy ?? [];
     }
 }

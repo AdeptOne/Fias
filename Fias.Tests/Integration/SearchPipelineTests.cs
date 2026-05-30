@@ -1,5 +1,6 @@
 using Dapper;
 using Fias.Application.Search;
+using Fias.Application.Services;
 using Fias.Infrastructure.Persistence;
 using Fias.Service.Updater.Services.Progress;
 using Fias.Service.Updater.Services.Schema;
@@ -60,6 +61,20 @@ public sealed class SearchPipelineTests(PostgresFixture fixture)
     }
 
     [Fact]
+    public async Task Builder_Reads_DateOnly_Columns_And_Builds_Address()
+    {
+        await BuildPipelineAsync();
+        var builder = new AddressBuilderService(
+            new SqlConnectionFactory(NpgsqlDataSource.Create(fixture.ConnectionString)));
+
+        // Билдер делает SELECT * по fias.* с date-колонками (updatedate) → проверяет DateOnly-маппинг.
+        var dto = await builder.BuildByObjectIdAsync(3, default);
+
+        Assert.NotNull(dto);
+        Assert.Contains("Ленина", dto!.FullName);
+    }
+
+    [Fact]
     public async Task GetByGuid_Returns_Object_With_Denormalized_Data()
     {
         await BuildPipelineAsync();
@@ -93,10 +108,12 @@ public sealed class SearchPipelineTests(PostgresFixture fixture)
         INSERT INTO fias.reestr_objects (objectid, levelid, isactive) VALUES
             (1, 1, true), (2, 5, true), (3, 8, true), (4, 10, true);
 
-        INSERT INTO fias.addressobjects (id, objectid, objectguid, name, typename, level, isactual, isactive) VALUES
-            (1, 1, NULL,         'Новосибирская', 'обл', 1, true, true),
-            (2, 2, NULL,         'Новосибирск',   'г',   5, true, true),
-            (3, 3, @streetGuid,  'Ленина',        'ул',  8, true, true);
+        -- updatedate заполнен намеренно: воспроизводит чтение date-колонки билдером
+        -- (Npgsql отдаёт date как DateTime → нужен DateOnly TypeHandler).
+        INSERT INTO fias.addressobjects (id, objectid, objectguid, name, typename, level, updatedate, isactual, isactive) VALUES
+            (1, 1, NULL,         'Новосибирская', 'обл', 1, DATE '2026-05-22', true, true),
+            (2, 2, NULL,         'Новосибирск',   'г',   5, DATE '2026-05-22', true, true),
+            (3, 3, @streetGuid,  'Ленина',        'ул',  8, DATE '2026-05-22', true, true);
 
         INSERT INTO fias.adm_hierarchy (id, objectid, parentobjid, path, isactive) VALUES
             (1, 1, NULL, '1',     true),
