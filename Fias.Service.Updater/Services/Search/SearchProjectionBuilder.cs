@@ -149,7 +149,7 @@ public class SearchProjectionBuilder(
     private const string AddressObjectsSql = """
         INSERT INTO search.address_objects_stage
             (object_id, object_guid, parent_object_id, parent_guid, region_object_id, path,
-             level, type_name, name, full_name,
+             level, type_name, name, full_name, house_count,
              region_code, postal_code, okato, oktmo, ifns_ul, ifns_fl, kladr_code,
              region, area, city, settlement, street)
         WITH ah AS (
@@ -200,6 +200,14 @@ public class SearchProjectionBuilder(
                    max(name) FILTER (WHERE level IN (4, 6)) AS settlement,
                    max(name) FILTER (WHERE level = 8)       AS street
               FROM expand GROUP BY objectid
+        ),
+        -- Число домов под объектом (через adm_hierarchy) — сигнал «популярности».
+        hc AS (
+            SELECT ah.parentobjid AS objectid, count(*) AS cnt
+              FROM fias.adm_hierarchy ah
+              JOIN fias.houses h ON h.objectid = ah.objectid AND h.isactual = true AND h.isactive = true
+             WHERE ah.isactive = true AND ah.parentobjid IS NOT NULL
+             GROUP BY ah.parentobjid
         )
         SELECT a.objectid,
                a.objectguid,
@@ -211,6 +219,7 @@ public class SearchProjectionBuilder(
                a.typename,
                a.name,
                g.full_name,
+               coalesce(hc.cnt, 0),
                CASE WHEN pv.region_code ~ '^\d+$' THEN pv.region_code::integer END,
                pv.postal_code, pv.okato, pv.oktmo, pv.ifns_ul, pv.ifns_fl, pv.kladr_code,
                g.region, g.area, g.city, g.settlement, g.street
@@ -218,7 +227,8 @@ public class SearchProjectionBuilder(
           JOIN ah ON ah.objectid = a.objectid
           LEFT JOIN ao p ON p.objectid = ah.parentobjid
           LEFT JOIN agg g ON g.objectid = a.objectid
-          LEFT JOIN pv ON pv.objectid = a.objectid;
+          LEFT JOIN pv ON pv.objectid = a.objectid
+          LEFT JOIN hc ON hc.objectid = a.objectid;
         """;
 
     // --- Фаза «дома»: привязка к родителю; реквизиты — свои (params) с фолбэком на родителя,

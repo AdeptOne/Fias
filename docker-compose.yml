@@ -40,22 +40,22 @@ services:
       - "postgres"
       # Кэш страниц самого Postgres. Больше -> меньше чтений с диска под нашими объёмами.
       - "-c"
-      - "shared_buffers=2GB"
+      - "shared_buffers=512MB"
       # КЛЮЧЕВОЕ для импорта: память на построение одного индекса (CREATE INDEX,
       # VACUUM). Чем больше — тем быстрее собираются GIN/GiST по триграммам.
       - "-c"
-      - "maintenance_work_mem=1GB"
+      - "maintenance_work_mem=512MB"
       # Память на сортировку/хэш в одном шаге запроса (поиск, ORDER BY).
       - "-c"
       - "work_mem=64MB"
       # Подсказка планировщику, сколько всего ОЗУ доступно под кэш ОС+БД.
       - "-c"
-      - "effective_cache_size=6GB"
+      - "effective_cache_size=2GB"
       # Реже и крупнее чекпоинты при массовой загрузке -> меньше нагрузка на диск.
       - "-c"
-      - "max_wal_size=4GB"
+      - "max_wal_size=2GB"
       - "-c"
-      - "min_wal_size=1GB"
+      - "min_wal_size=512MB"
       - "-c"
       - "checkpoint_completion_target=0.9"
       # Сжатие WAL — экономит диск/IO при объёмном импорте ГАР.
@@ -75,7 +75,7 @@ services:
       - "max_worker_processes=8"
 
     # Параллельным воркерам нужна общая память в /dev/shm; дефолтные 64 МБ малы.
-    shm_size: "1gb"
+    shm_size: "512M"
 
     volumes:
       - postgres-data:/var/lib/postgresql/data
@@ -131,6 +131,30 @@ services:
     volumes:
       # Монтируем хостовую папку с выгрузкой ГАР внутрь контейнера.
       - ${FIAS_IMPORT_DIR:-./fias-import}:/fias/import
+
+  # --------------------------------------------------------------------------
+  #  Fias.Eval — харнесс качества поиска (recall@k / MRR по бакетам).
+  #  Не стартует с обычным `up` (профиль eval). Запуск разово в сети compose,
+  #  где БД доступна по имени сервиса `postgres`:
+  #    docker compose run --rm fias.eval --region-count 5 --streets 40 \
+  #        --houses 20 --type-dups 20 --out /out/eval-misses.csv
+  #  CSV промахов окажется в ./eval-output на хосте.
+  # --------------------------------------------------------------------------
+  fias.eval:
+    profiles: ["eval"]
+    build:
+      context: .
+      dockerfile: Fias.Eval/Dockerfile
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+    environment:
+      ConnectionStrings__Default: "Host=postgres;Database=${POSTGRES_DB:-fias};Username=${POSTGRES_USER:-postgres};Password=${POSTGRES_PASSWORD:-secret}"
+
+    volumes:
+      - ./eval-output:/out   # сюда падает CSV промахов (--out /out/...)
 
 # --------------------------------------------------------------------------
 #  Именованный volume для данных Postgres (хранится Docker'ом на хосте).

@@ -57,34 +57,37 @@ public class AddressBuilderService(ISqlConnectionFactory factory) : IAddressBuil
     {
         var ids = ParsePath(path);
         if (ids.Count == 0) return null;
+        // id передаём CSV-строкой и разворачиваем в bigint[] в SQL: детерминированно в любом
+        // окружении (не зависит от раскрытия списков Dapper / Dapper.AOT). ids — это longs из path.
+        var idsCsv = string.Join(",", ids);
 
         await using var conn = await factory.OpenAsync(ct);
 
         // 1. Тип каждого уровня — из reestr_objects (PK objectid -> уникально).
         var levels = (await conn.QueryAsync<LevelRow>(new CommandDefinition(
-                "SELECT objectid, levelid, objectguid FROM fias.reestr_objects WHERE objectid IN @ids",
-                new { ids }, cancellationToken: ct)))
+                "SELECT objectid, levelid, objectguid FROM fias.reestr_objects WHERE objectid = ANY(string_to_array(@idsCsv, ',')::bigint[])",
+                new { idsCsv }, cancellationToken: ct)))
             .ToDictionary(x => x.ObjectId);
 
         // 2. Основные данные по группам уровней — по одному запросу каждая.
         var addressList = (await conn.QueryAsync<AddressObject>(new CommandDefinition(
-            "SELECT * FROM fias.addressobjects WHERE isactual = true AND isactive = true AND objectid IN @ids",
-            new { ids }, cancellationToken: ct))).AsList();
+            "SELECT * FROM fias.addressobjects WHERE isactual = true AND isactive = true AND objectid = ANY(string_to_array(@idsCsv, ',')::bigint[])",
+            new { idsCsv }, cancellationToken: ct))).AsList();
         var addressDict = addressList.GroupBy(a => a.ObjectId).ToDictionary(g => g.Key, g => g.First());
 
         var houseList = (await conn.QueryAsync<House>(new CommandDefinition(
-            "SELECT * FROM fias.houses WHERE isactual = true AND isactive = true AND objectid IN @ids",
-            new { ids }, cancellationToken: ct))).AsList();
+            "SELECT * FROM fias.houses WHERE isactual = true AND isactive = true AND objectid = ANY(string_to_array(@idsCsv, ',')::bigint[])",
+            new { idsCsv }, cancellationToken: ct))).AsList();
         var houseDict = houseList.GroupBy(h => h.ObjectId).ToDictionary(g => g.Key, g => g.First());
 
         var apartmentList = (await conn.QueryAsync<Apartment>(new CommandDefinition(
-            "SELECT * FROM fias.apartments WHERE isactual = true AND isactive = true AND objectid IN @ids",
-            new { ids }, cancellationToken: ct))).AsList();
+            "SELECT * FROM fias.apartments WHERE isactual = true AND isactive = true AND objectid = ANY(string_to_array(@idsCsv, ',')::bigint[])",
+            new { idsCsv }, cancellationToken: ct))).AsList();
         var apartmentDict = apartmentList.GroupBy(a => a.ObjectId).ToDictionary(g => g.Key, g => g.First());
 
         var roomList = (await conn.QueryAsync<Room>(new CommandDefinition(
-            "SELECT * FROM fias.rooms WHERE isactual = true AND isactive = true AND objectid IN @ids",
-            new { ids }, cancellationToken: ct))).AsList();
+            "SELECT * FROM fias.rooms WHERE isactual = true AND isactive = true AND objectid = ANY(string_to_array(@idsCsv, ',')::bigint[])",
+            new { idsCsv }, cancellationToken: ct))).AsList();
         var roomDict = roomList.GroupBy(r => r.ObjectId).ToDictionary(g => g.Key, g => g.First());
 
         // 3. Параметры (PARAM) по нужным TYPEID — индекс, ОКАТО, ОКТМО, КЛАДР, кадастр и т.д.
@@ -93,11 +96,11 @@ public class AddressBuilderService(ISqlConnectionFactory factory) : IAddressBuil
         var paramRows = await conn.QueryAsync<ParamRow>(new CommandDefinition("""
             SELECT objectid, typeid, value
             FROM fias.params
-            WHERE objectid IN @ids
+            WHERE objectid = ANY(string_to_array(@idsCsv, ',')::bigint[])
               AND typeid IN (1, 2, 5, 6, 7, 8, 11, 12, 16, 21)
               AND (enddate IS NULL OR enddate > @today)
             ORDER BY objectid, typeid, startdate DESC NULLS LAST, id DESC
-            """, new { ids, today }, cancellationToken: ct));
+            """, new { idsCsv, today }, cancellationToken: ct));
 
         var paramsByObj = new Dictionary<long, Dictionary<int, string>>();
         foreach (var row in paramRows)

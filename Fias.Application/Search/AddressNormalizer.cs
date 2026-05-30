@@ -97,10 +97,52 @@ public sealed partial class AddressNormalizer
             Tokens = tokens,
             RegionOrCity = NullIfEmpty(regionOrCity),
             Street = NullIfEmpty(street),
+            NameTokens = nameTokens,
             House = NullIfEmpty(house.Merged),
             HouseNum = house.Num,
             Building = house.Building,
         };
+    }
+
+    /// <summary>
+    /// Альтернативные разборы для recall-фолбэка — когда основной дал пусто. От специфичного к общему;
+    /// <see cref="Services.AddressSearchService"/> пробует их по очереди до первого непустого результата.
+    /// </summary>
+    public IEnumerable<ParsedAddressQuery> AlternativeSplits(ParsedAddressQuery query)
+    {
+        var nt = query.NameTokens;
+        if (nt.Count == 0) yield break;
+
+        var last = nt[^1];
+        var head = nt.Take(nt.Count - 1).ToList();
+
+        if (StreetMarkers.Contains(last))
+        {
+            var cont = NullIfEmpty(string.Join(' ', StripMarkers(head)));
+
+            // 1) Тип-маркер как ИМЯ улицы, дом СОХРАНЯЕМ («Челябинск Тупик»; «город Линия 5» =
+            //    дом 5 на ул. Линия). Пробуем первым — это более частая трактовка.
+            if (cont is not null)
+                yield return query with { RegionOrCity = cont, Street = last };
+
+            // 2) Имя улицы = «<маркер> <число>» («Линия 2», «квартал 4»): число ошибочно ушло в дом.
+            //    Только если дом-сохраняющий вариант не нашёлся → пересобираем имя, дом обнуляем.
+            if (query.House is not null)
+                yield return query with
+                {
+                    RegionOrCity = cont,
+                    Street = $"{last} {query.HouseNum ?? query.House}",
+                    House = null, HouseNum = null, Building = null,
+                };
+        }
+        else if (nt.Count >= 2)
+        {
+            // Обратный порядок «улица … город» («Ленина Магнитогорск», «12-я Восточная Канашево»):
+            // контейнер — последний токен, улица — остальное (без маркеров).
+            var street = NullIfEmpty(string.Join(' ', StripMarkers(head)));
+            if (street is not null)
+                yield return query with { RegionOrCity = last, Street = street };
+        }
     }
 
     /// <summary>

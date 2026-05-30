@@ -22,11 +22,48 @@ public class AddressSearchService(
     private const double DefaultThreshold = 0.3;
     private const int HouseLevel = 10;
 
+    /// <summary>
+    /// Адаптивный порог триграмм по длине имени. У коротких имён одна перестановка букв роняет
+    /// similarity ниже 0.3 (напр. «леинна»/«ленина» = 0.27) и опечатка выпадает из кандидатов —
+    /// для коротких терминов опускаем порог до 0.25. Длинные оставляем на 0.3 (меньше шума).
+    /// Очень короткие (≤4) триграммами всё равно не вытащить («мриа»/«мира» = 0.11) — глубже не идём.
+    /// Берём минимальную длину среди значимых терминов (улица/город): её и надо «спасать».
+    /// </summary>
+    private static double AdaptiveThreshold(ParsedAddressQuery q)
+    {
+        int? minLen = null;
+        foreach (var t in new[] { q.Street, q.RegionOrCity })
+            if (t is { Length: > 0 } && (minLen is null || t.Length < minLen)) minLen = t.Length;
+        minLen ??= q.Normalized.Length;
+        return minLen <= 6 ? 0.25 : DefaultThreshold;
+    }
+
+    /// <summary>
+    /// Поиск с recall-фолбэком: если основной разбор не дал НИЧЕГО, пробуем альтернативные
+    /// интерпретации строки (<see cref="AddressNormalizer.AlternativeSplits"/>) — обратный порядок
+    /// «улица город» и случай, когда тип-слово оказалось именем улицы («Челябинск Тупик»). Срабатывает
+    /// ТОЛЬКО на пустом результате, поэтому не может ухудшить уже находимые запросы.
+    /// </summary>
+    private async Task<IReadOnlyList<Search.AddressResult>> SearchWithFallbackAsync(
+        ParsedAddressQuery parsed, CancellationToken ct)
+    {
+        var hits = await searchRepository.SearchAsync(parsed, ct);
+        if (hits.Count > 0) return hits;
+
+        foreach (var alt0 in normalizer.AlternativeSplits(parsed))
+        {
+            var alt = alt0 with { Limit = parsed.Limit, SimilarityThreshold = AdaptiveThreshold(alt0) };
+            var altHits = await searchRepository.SearchAsync(alt, ct);
+            if (altHits.Count > 0) return altHits;
+        }
+        return hits;
+    }
+
     public async Task<IReadOnlyList<AddressSearchResultDto>> SearchAsync(string query, int limit, CancellationToken ct)
     {
         var clean = (query ?? string.Empty).Trim();
         if (clean.Length < 2)
-            return Array.Empty<AddressSearchResultDto>();
+            return [];
 
         limit = Math.Clamp(limit, 1, 100);
 
@@ -34,13 +71,14 @@ public class AddressSearchService(
         if (Guid.TryParse(clean, out var guid))
         {
             var byGuidId = await ResolveObjectIdByGuidAsync(guid, ct);
-            if (byGuidId is null) return Array.Empty<AddressSearchResultDto>();
+            if (byGuidId is null) return [];
             return [await MakeResultAsync(byGuidId.Value, guid, null, null, string.Empty, 1.0, ct)];
         }
 
-        var parsed = normalizer.Parse(clean) with { Limit = limit, SimilarityThreshold = DefaultThreshold };
+        var parsed = normalizer.Parse(clean);
+        parsed = parsed with { Limit = limit, SimilarityThreshold = AdaptiveThreshold(parsed) };
 
-        var hits = await searchRepository.SearchAsync(parsed, ct);
+        var hits = await SearchWithFallbackAsync(parsed, ct);
         logger.LogDebug("Поиск '{Query}' → {Count} рез.", clean, hits.Count);
 
         var results = new List<AddressSearchResultDto>(hits.Count);
@@ -98,9 +136,10 @@ public class AddressSearchService(
             return single is null ? Array.Empty<SuggestionDto>() : [single];
         }
 
-        var parsed = normalizer.Parse(clean) with { Limit = Math.Clamp(count, 1, 20), SimilarityThreshold = DefaultThreshold };
+        var parsed = normalizer.Parse(clean);
+        parsed = parsed with { Limit = Math.Clamp(count, 1, 20), SimilarityThreshold = AdaptiveThreshold(parsed) };
 
-        var hits = await searchRepository.SearchAsync(parsed, ct);
+        var hits = await SearchWithFallbackAsync(parsed, ct);
         var items = new List<SuggestionDto>(hits.Count);
         foreach (var hit in hits) items.Add(ToSuggestion(hit));
         return items;
@@ -118,8 +157,9 @@ public class AddressSearchService(
         if (clean.Length < 2)
             return new CleanResultDto(null, null, null, Qc: 3, Confidence: 0);
 
-        var parsed = normalizer.Parse(clean) with { Limit = 1 };
-        var hits = await searchRepository.SearchAsync(parsed, ct);
+        var parsed = normalizer.Parse(clean);
+        parsed = parsed with { Limit = 1, SimilarityThreshold = AdaptiveThreshold(parsed) };
+        var hits = await SearchWithFallbackAsync(parsed, ct);
         var best = hits.Count > 0 ? hits[0] : null;
         if (best is null)
             return new CleanResultDto(null, null, null, Qc: 3, Confidence: 0);
@@ -200,7 +240,7 @@ public class AddressSearchService(
             cancellationToken: ct))).AsList();
 
         if (pageItems.Count == 0)
-            return Array.Empty<AddressChildDto>();
+            return [];
 
         var result = new List<AddressChildDto>(pageItems.Count);
         foreach (var id in pageItems)
@@ -216,6 +256,6 @@ public class AddressSearchService(
     public async Task<IReadOnlyList<AddressHierarchyItemDto>> GetParentsAsync(long objectId, CancellationToken ct)
     {
         var address = await builder.BuildByObjectIdAsync(objectId, ct);
-        return address?.Hierarchy ?? Array.Empty<AddressHierarchyItemDto>();
+        return address?.Hierarchy ?? [];
     }
 }

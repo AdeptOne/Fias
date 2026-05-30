@@ -21,6 +21,10 @@ public sealed record ParsedAddressQuery
     /// <summary>Токены нормализованной строки с раскрытыми сокращениями (нск→новосибирск).</summary>
     public required IReadOnlyList<string> Tokens { get; init; }
 
+    /// <summary>Именная часть (без хвостового дома), маркеры типов СОХРАНЕНЫ — сырьё для
+    /// альтернативных разборов в recall-фолбэке (обратный порядок, имя-улицы=маркер).</summary>
+    public IReadOnlyList<string> NameTokens { get; init; } = [];
+
     /// <summary>Потенциальный регион/город — «контейнер» верхнего уровня. null, если не вычленён.</summary>
     public string? RegionOrCity { get; init; }
 

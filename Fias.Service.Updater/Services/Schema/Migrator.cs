@@ -316,6 +316,7 @@ public class Migrator(INpgsqlConnectionFactory factory, ILogger<Migrator> logger
             type_name         text,
             name              text,
             full_name         text,        -- денормализованная полная адресная строка (для отображения)
+            house_count       integer,     -- число домов под объектом — сигнал «популярности» для ранжирования
             -- Реквизиты объекта (из fias.params) — для инлайн-выдачи в стиле DaData.
             region_code       integer,
             postal_code       text,
@@ -332,6 +333,8 @@ public class Migrator(INpgsqlConnectionFactory factory, ILogger<Migrator> logger
             street            text,
             name_tsv          tsvector GENERATED ALWAYS AS (to_tsvector('russian', coalesce(name, ''))) STORED
         );
+        -- Для уже существующих БД (CREATE TABLE IF NOT EXISTS не добавляет колонки).
+        ALTER TABLE search.address_objects ADD COLUMN IF NOT EXISTS house_count integer;
 
         -- Дома, привязанные к parent_object_id/parent_guid (улица/нас. пункт).
         CREATE TABLE IF NOT EXISTS search.houses (

@@ -82,10 +82,11 @@ public sealed class AddressSearchRepository(NpgsqlDataSource dataSource) : IAddr
         }
 
         // --- Фаза 1: контейнер (регион/город). Префикс его поддерева — для поиска улицы/дома.
+        ResolveHit? container = null;
         var containerPrefix = baseScope;
         if (query.RegionOrCity is not null)
         {
-            var container = await ResolveBestAsync(conn, tx, query.RegionOrCity, baseScope, ct);
+            container = await ResolveBestAsync(conn, tx, query.RegionOrCity, baseScope, ct);
             if (container is { Path: { } cp })
                 containerPrefix = cp + ".%";
         }
@@ -93,6 +94,19 @@ public sealed class AddressSearchRepository(NpgsqlDataSource dataSource) : IAddr
         // --- Фаза 2a: есть дом → ищем дома в самом узком известном поддереве.
         if (query.House is not null)
         {
+            var num = query.HouseNum ?? query.House!;
+
+            // Особый случай «улица + дом» без города: лучший «контейнер» сам оказался улицей
+            // (level 8). Тогда ищем дом N по ВСЕМ одноимённым улицам — многогородной поиск
+            // («труда 11» → дом 11 на Труда в разных городах), а не в одной случайной.
+            if (query.Street is null && query.RegionOrCity is not null && container is { Level: 8 })
+            {
+                var multi = await SearchHousesAcrossStreetsAsync(
+                    conn, tx, query.RegionOrCity, num, query.Building, regionCode, baseScope, query.Limit, ct);
+                await tx.CommitAsync(ct);
+                return multi;
+            }
+
             long? streetId = null;
             var housePrefix = containerPrefix;
 
@@ -110,7 +124,6 @@ public sealed class AddressSearchRepository(NpgsqlDataSource dataSource) : IAddr
             // Нужен хоть какой-то scope — иначе по всей базе домов искать нельзя.
             if (streetId is not null || housePrefix is not null)
             {
-                var num = query.HouseNum ?? query.House!;
                 var houses = await SearchHousesAsync(conn, tx, num, query.Building, streetId, housePrefix, query.Limit, ct);
                 await tx.CommitAsync(ct);
                 return houses;
@@ -160,8 +173,8 @@ public sealed class AddressSearchRepository(NpgsqlDataSource dataSource) : IAddr
             ),
             ranked AS (
                 SELECT *,
-                       row_number() OVER (ORDER BY fts_rank DESC, object_id) AS r_fts,
-                       row_number() OVER (ORDER BY trgm_sim DESC, object_id) AS r_trgm
+                       rank() OVER (ORDER BY fts_rank DESC) AS r_fts,
+                       rank() OVER (ORDER BY trgm_sim DESC) AS r_trgm
                 FROM cand
             )
             SELECT object_id   AS "ObjectId",
@@ -187,7 +200,9 @@ public sealed class AddressSearchRepository(NpgsqlDataSource dataSource) : IAddr
                    trgm_sim    AS "TrgmSimilarity",
                    ({RrfScoreExpr})::float8 AS "Score"
             FROM ranked
-            ORDER BY "Score" DESC
+            -- Популярность (house_count) — только тай-брейк при равном RRF: разруливает дубли
+            -- одноимённых улиц (берём «живую» с домами), но НИКОГДА не перебивает лучшее совпадение.
+            ORDER BY "Score" DESC, house_count DESC NULLS LAST
             LIMIT @limit
             """;
 
@@ -229,8 +244,7 @@ public sealed class AddressSearchRepository(NpgsqlDataSource dataSource) : IAddr
                    street                                      AS "Street",
                    0::float8                                   AS "FtsRank",
                    similarity(house_num, @num)::float8         AS "TrgmSimilarity",
-                   ( CASE WHEN lower(house_num) = @numLower THEN 1.0
-                          ELSE similarity(house_num, @num) END
+                   ( CASE WHEN lower(house_num) = @numLower THEN 1.0 ELSE 0.6 END
                      + CASE WHEN @buildingLower IS NOT NULL
                                  AND (lower(add_num1) = @buildingLower OR lower(add_num2) = @buildingLower)
                             THEN 0.25 ELSE 0 END
@@ -239,7 +253,9 @@ public sealed class AddressSearchRepository(NpgsqlDataSource dataSource) : IAddr
             WHERE house_num IS NOT NULL
               AND (@parentObjectId::bigint IS NULL OR parent_object_id = @parentObjectId)
               AND (@pathPrefix IS NULL OR path LIKE @pathPrefix)
-              AND (lower(house_num) = @numLower OR house_num % @num)
+              -- Точный номер ИЛИ вариант с литерой/корпусом («11»→«11а»,«11к1»), но НЕ другой
+              -- номер («111»,«110»): триграммный % на числах тянул соседей как мнимые опечатки.
+              AND (lower(house_num) = @numLower OR house_num ~* @numVariant)
             ORDER BY "Score" DESC, house_num
             LIMIT @limit
             """;
@@ -250,6 +266,7 @@ public sealed class AddressSearchRepository(NpgsqlDataSource dataSource) : IAddr
             {
                 num,
                 numLower = num.ToLowerInvariant(),
+                numVariant = $"^{num}(\\D|$)",
                 buildingLower = building?.ToLowerInvariant(),
                 parentObjectId,
                 pathPrefix,
@@ -260,7 +277,85 @@ public sealed class AddressSearchRepository(NpgsqlDataSource dataSource) : IAddr
         return rows.AsList();
     }
 
-    private readonly record struct ResolveHit(long ObjectId, Guid? ObjectGuid, string? Path);
+    /// <summary>
+    /// Многогородной поиск дома: дом <paramref name="num"/> по ВСЕМ улицам, чьё имя совпадает с
+    /// <paramref name="term"/> (кейс «труда 11» без города → дом 11 на Труда в разных городах).
+    /// Точный номер строго выше вариантов с литерой/корпусом; порядок улиц — по популярности
+    /// (house_count), чтобы крупные города шли первыми.
+    /// </summary>
+    private static async Task<IReadOnlyList<AddressResult>> SearchHousesAcrossStreetsAsync(
+        NpgsqlConnection conn, IDbTransaction tx,
+        string term, string num, string? building, int? regionCode, string? pathPrefix, int limit, CancellationToken ct)
+    {
+        var streetFilters = new StringBuilder();
+        if (regionCode is not null) streetFilters.AppendLine("              AND a.region_code = @regionCode");
+        if (pathPrefix is not null) streetFilters.AppendLine("              AND a.path LIKE @pathPrefix");
+
+        var sql = $"""
+            WITH q AS (SELECT plainto_tsquery('russian', @term) AS tsq),
+            streets AS (
+                SELECT a.object_id, a.house_count
+                FROM search.address_objects a
+                CROSS JOIN q
+                WHERE a.level = 8
+                  -- Именно НАЗВАННАЯ улица: FTS (стемминг) либо точное равенство. БЕЗ триграммного
+                  -- %, который в этой ветке тянул близкие имена (Трудовая попадала в «труда»).
+                  AND (a.name_tsv @@ q.tsq OR lower(btrim(a.name)) = lower(@term))
+            {streetFilters}
+            )
+            SELECT h.object_id   AS "ObjectId",
+                   h.object_guid AS "ObjectGuid",
+                   h.parent_guid AS "ParentGuid",
+                   @houseLevel   AS "Level",
+                   h.house_num   AS "Name",
+                   NULL::text    AS "TypeName",
+                   h.full_name   AS "FullName",
+                   h.region_code AS "RegionCode",
+                   h.postal_code AS "PostalCode",
+                   h.okato       AS "Okato",
+                   h.oktmo       AS "Oktmo",
+                   h.ifns_ul     AS "IfnsUl",
+                   h.ifns_fl     AS "IfnsFl",
+                   h.kladr_code  AS "KladrCode",
+                   h.region      AS "Region",
+                   h.area        AS "Area",
+                   h.city        AS "City",
+                   h.settlement  AS "Settlement",
+                   h.street      AS "Street",
+                   0::float8     AS "FtsRank",
+                   similarity(h.house_num, @num)::float8 AS "TrgmSimilarity",
+                   ( CASE WHEN lower(h.house_num) = @numLower THEN 1.0 ELSE 0.6 END
+                     + CASE WHEN @buildingLower IS NOT NULL
+                                 AND (lower(h.add_num1) = @buildingLower OR lower(h.add_num2) = @buildingLower)
+                            THEN 0.25 ELSE 0 END )::float8 AS "Score"
+            FROM search.houses h
+            JOIN streets s ON s.object_id = h.parent_object_id
+            WHERE h.house_num IS NOT NULL
+              AND (lower(h.house_num) = @numLower OR h.house_num ~* @numVariant)
+            -- Точный номер выше вариантов; среди равных — крупные улицы (house_count) первыми.
+            ORDER BY "Score" DESC, s.house_count DESC NULLS LAST, h.house_num
+            LIMIT @limit
+            """;
+
+        var rows = await conn.QueryAsync<AddressResult>(new CommandDefinition(
+            sql,
+            new
+            {
+                term,
+                num,
+                numLower = num.ToLowerInvariant(),
+                numVariant = $"^{num}(\\D|$)",
+                buildingLower = building?.ToLowerInvariant(),
+                regionCode,
+                pathPrefix,
+                houseLevel = HouseLevel,
+                limit,
+            },
+            transaction: tx, cancellationToken: ct));
+        return rows.AsList();
+    }
+
+    private readonly record struct ResolveHit(long ObjectId, Guid? ObjectGuid, string? Path, int? Level);
 
     /// <summary>Лучший объект по термину в заданном поддереве (с его денормализованным path).</summary>
     private static async Task<ResolveHit?> ResolveBestAsync(
@@ -271,7 +366,7 @@ public sealed class AddressSearchRepository(NpgsqlDataSource dataSource) : IAddr
         var sql = $"""
             WITH q AS (SELECT plainto_tsquery('russian', @term) AS tsq),
             cand AS (
-                SELECT a.object_id, a.object_guid, a.path, a.level,
+                SELECT a.object_id, a.object_guid, a.path, a.level, a.house_count,
                        ts_rank(a.name_tsv, q.tsq) AS fts_rank,
                        similarity(a.name, @term)  AS trgm_sim,
                        (a.name_tsv @@ q.tsq)      AS fts_match,
@@ -283,13 +378,13 @@ public sealed class AddressSearchRepository(NpgsqlDataSource dataSource) : IAddr
             ),
             ranked AS (
                 SELECT *,
-                       row_number() OVER (ORDER BY fts_rank DESC, object_id) AS r_fts,
-                       row_number() OVER (ORDER BY trgm_sim DESC, object_id) AS r_trgm
+                       rank() OVER (ORDER BY fts_rank DESC) AS r_fts,
+                       rank() OVER (ORDER BY trgm_sim DESC) AS r_trgm
                 FROM cand
             )
-            SELECT object_id AS "ObjectId", object_guid AS "ObjectGuid", path AS "Path"
+            SELECT object_id AS "ObjectId", object_guid AS "ObjectGuid", path AS "Path", level AS "Level"
             FROM ranked
-            ORDER BY {RrfScoreExpr} DESC
+            ORDER BY {RrfScoreExpr} DESC, house_count DESC NULLS LAST
             LIMIT 1
             """;
 
