@@ -22,6 +22,22 @@ public class AddressSearchService(
     private const double DefaultThreshold = 0.3;
     private const int HouseLevel = 10;
 
+    /// <summary>
+    /// Адаптивный порог триграмм по длине имени. У коротких имён одна перестановка букв роняет
+    /// similarity ниже 0.3 (напр. «леинна»/«ленина» = 0.27) и опечатка выпадает из кандидатов —
+    /// для коротких терминов опускаем порог до 0.25. Длинные оставляем на 0.3 (меньше шума).
+    /// Очень короткие (≤4) триграммами всё равно не вытащить («мриа»/«мира» = 0.11) — глубже не идём.
+    /// Берём минимальную длину среди значимых терминов (улица/город): её и надо «спасать».
+    /// </summary>
+    private static double AdaptiveThreshold(ParsedAddressQuery q)
+    {
+        int? minLen = null;
+        foreach (var t in new[] { q.Street, q.RegionOrCity })
+            if (t is { Length: > 0 } && (minLen is null || t.Length < minLen)) minLen = t.Length;
+        minLen ??= q.Normalized.Length;
+        return minLen <= 6 ? 0.25 : DefaultThreshold;
+    }
+
     public async Task<IReadOnlyList<AddressSearchResultDto>> SearchAsync(string query, int limit, CancellationToken ct)
     {
         var clean = (query ?? string.Empty).Trim();
@@ -38,7 +54,8 @@ public class AddressSearchService(
             return [await MakeResultAsync(byGuidId.Value, guid, null, null, string.Empty, 1.0, ct)];
         }
 
-        var parsed = normalizer.Parse(clean) with { Limit = limit, SimilarityThreshold = DefaultThreshold };
+        var parsed = normalizer.Parse(clean);
+        parsed = parsed with { Limit = limit, SimilarityThreshold = AdaptiveThreshold(parsed) };
 
         var hits = await searchRepository.SearchAsync(parsed, ct);
         logger.LogDebug("Поиск '{Query}' → {Count} рез.", clean, hits.Count);
@@ -98,7 +115,8 @@ public class AddressSearchService(
             return single is null ? Array.Empty<SuggestionDto>() : [single];
         }
 
-        var parsed = normalizer.Parse(clean) with { Limit = Math.Clamp(count, 1, 20), SimilarityThreshold = DefaultThreshold };
+        var parsed = normalizer.Parse(clean);
+        parsed = parsed with { Limit = Math.Clamp(count, 1, 20), SimilarityThreshold = AdaptiveThreshold(parsed) };
 
         var hits = await searchRepository.SearchAsync(parsed, ct);
         var items = new List<SuggestionDto>(hits.Count);
@@ -118,7 +136,8 @@ public class AddressSearchService(
         if (clean.Length < 2)
             return new CleanResultDto(null, null, null, Qc: 3, Confidence: 0);
 
-        var parsed = normalizer.Parse(clean) with { Limit = 1 };
+        var parsed = normalizer.Parse(clean);
+        parsed = parsed with { Limit = 1, SimilarityThreshold = AdaptiveThreshold(parsed) };
         var hits = await searchRepository.SearchAsync(parsed, ct);
         var best = hits.Count > 0 ? hits[0] : null;
         if (best is null)
