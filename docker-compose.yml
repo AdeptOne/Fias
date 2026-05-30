@@ -132,6 +132,30 @@ services:
       # Монтируем хостовую папку с выгрузкой ГАР внутрь контейнера.
       - ${FIAS_IMPORT_DIR:-./fias-import}:/fias/import
 
+  # --------------------------------------------------------------------------
+  #  Fias.Eval — харнесс качества поиска (recall@k / MRR по бакетам).
+  #  Не стартует с обычным `up` (профиль eval). Запуск разово в сети compose,
+  #  где БД доступна по имени сервиса `postgres`:
+  #    docker compose run --rm fias.eval --region-count 5 --streets 40 \
+  #        --houses 20 --type-dups 20 --out /out/eval-misses.csv
+  #  CSV промахов окажется в ./eval-output на хосте.
+  # --------------------------------------------------------------------------
+  fias.eval:
+    profiles: ["eval"]
+    build:
+      context: .
+      dockerfile: Fias.Eval/Dockerfile
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+    environment:
+      ConnectionStrings__Default: "Host=postgres;Database=${POSTGRES_DB:-fias};Username=${POSTGRES_USER:-postgres};Password=${POSTGRES_PASSWORD:-secret}"
+
+    volumes:
+      - ./eval-output:/out   # сюда падает CSV промахов (--out /out/...)
+
 # --------------------------------------------------------------------------
 #  Именованный volume для данных Postgres (хранится Docker'ом на хосте).
 # --------------------------------------------------------------------------

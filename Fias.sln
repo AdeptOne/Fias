@@ -24,6 +24,8 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{8D62521F
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Fias.Tests", "Fias.Tests\Fias.Tests.csproj", "{DAE3F0FF-9958-45E6-8BF9-5B8313A36CC8}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Fias.Eval", "Fias.Eval\Fias.Eval.csproj", "{6DEE96D4-4732-49C5-84BD-EE51EBFD14FC}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -106,6 +108,18 @@ Global
 		{DAE3F0FF-9958-45E6-8BF9-5B8313A36CC8}.Release|x64.Build.0 = Release|Any CPU
 		{DAE3F0FF-9958-45E6-8BF9-5B8313A36CC8}.Release|x86.ActiveCfg = Release|Any CPU
 		{DAE3F0FF-9958-45E6-8BF9-5B8313A36CC8}.Release|x86.Build.0 = Release|Any CPU
+		{6DEE96D4-4732-49C5-84BD-EE51EBFD14FC}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6DEE96D4-4732-49C5-84BD-EE51EBFD14FC}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6DEE96D4-4732-49C5-84BD-EE51EBFD14FC}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{6DEE96D4-4732-49C5-84BD-EE51EBFD14FC}.Debug|x64.Build.0 = Debug|Any CPU
+		{6DEE96D4-4732-49C5-84BD-EE51EBFD14FC}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{6DEE96D4-4732-49C5-84BD-EE51EBFD14FC}.Debug|x86.Build.0 = Debug|Any CPU
+		{6DEE96D4-4732-49C5-84BD-EE51EBFD14FC}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6DEE96D4-4732-49C5-84BD-EE51EBFD14FC}.Release|Any CPU.Build.0 = Release|Any CPU
+		{6DEE96D4-4732-49C5-84BD-EE51EBFD14FC}.Release|x64.ActiveCfg = Release|Any CPU
+		{6DEE96D4-4732-49C5-84BD-EE51EBFD14FC}.Release|x64.Build.0 = Release|Any CPU
+		{6DEE96D4-4732-49C5-84BD-EE51EBFD14FC}.Release|x86.ActiveCfg = Release|Any CPU
+		{6DEE96D4-4732-49C5-84BD-EE51EBFD14FC}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

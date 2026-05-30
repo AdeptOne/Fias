@@ -9,3 +9,7 @@ riderModule.iml
 
 # Локальные секреты docker-compose (коммитим только .env.example)
 .env
+
+# Артефакты eval-харнесса (генерируемый отчёт о промахах)
+eval-misses.csv
+/eval-output/
