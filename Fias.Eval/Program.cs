@@ -68,6 +68,18 @@ catch (Exception ex)
     return 1;
 }
 
+// Ad-hoc режим: печатаем выдачу боевого поиска по строке и выходим (разбор конкретных кейсов).
+if (!string.IsNullOrWhiteSpace(opt.Query))
+{
+    var adhoc = sp.GetRequiredService<Fias.Application.Services.IAddressSearchService>();
+    var hits = await adhoc.SearchAsync(opt.Query, opt.Limit, ct);
+    Console.WriteLine($"\nЗапрос «{opt.Query}» → {hits.Count} рез.:");
+    var rank = 0;
+    foreach (var h in hits)
+        Console.WriteLine($"  {++rank,2}. [{h.Similarity:F3}] lvl{h.Level} {h.FullName}  ({h.ObjectGuid})");
+    return 0;
+}
+
 var generator = sp.GetRequiredService<GoldenSetGenerator>();
 Console.WriteLine("Генерация золотого набора из search.*…");
 var golden = await generator.GenerateAsync(opt, ct);

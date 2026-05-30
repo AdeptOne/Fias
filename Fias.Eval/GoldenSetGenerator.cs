@@ -126,11 +126,15 @@ public sealed class GoldenSetGenerator(NpgsqlDataSource dataSource)
         var rows = await conn.QueryAsync<HouseRow>(new CommandDefinition(
             sql, new { region, seed = opt.Seed, take = opt.HousesPerRegion }, cancellationToken: ct));
 
-        return rows.Select(r => new GoldenItem(
-            "house",
-            $"{r.Container} {r.Street} {r.HouseNum}",
-            r.Guid,
-            $"{r.Container}, {r.Street}, д {r.HouseNum}")).ToList();
+        // Два бакета на дом: с городом (house) и без города (nocity — стресс «улица+дом» без
+        // контейнера: одноимённые улицы по городам, точный номер должен всплыть в нескольких).
+        return rows.SelectMany(r => new[]
+        {
+            new GoldenItem("house", $"{r.Container} {r.Street} {r.HouseNum}", r.Guid,
+                $"{r.Container}, {r.Street}, д {r.HouseNum}"),
+            new GoldenItem("nocity", $"{r.Street} {r.HouseNum}", r.Guid,
+                $"{r.Container}, {r.Street}, д {r.HouseNum}"),
+        }).ToList();
     }
 
     private sealed record TypeRow(Guid Guid, string Container, string Name, string TypeName);

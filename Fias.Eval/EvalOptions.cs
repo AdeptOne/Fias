@@ -34,6 +34,10 @@ public sealed record EvalOptions
     /// <summary>Куда писать CSV с промахами (запрос, ожидаемое, что вернулось). Пусто — не писать.</summary>
     public string MissesCsv { get; init; } = "eval-misses.csv";
 
+    /// <summary>Ad-hoc режим: если задан, харнесс не гоняет golden-set, а просто печатает выдачу
+    /// поиска по этой строке (для разбора конкретных кейсов на боевом пайплайне).</summary>
+    public string? Query { get; init; }
+
     public static EvalOptions Parse(string[] args)
     {
         var o = new EvalOptions();
@@ -53,6 +57,7 @@ public sealed record EvalOptions
                 "--limit" => o with { Limit = NextInt() },
                 "--out" => o with { MissesCsv = Next() },
                 "--no-csv" => o with { MissesCsv = string.Empty },
+                "--query" => o with { Query = Next() },
                 _ => throw new ArgumentException($"Неизвестный аргумент: {args[i]}"),
             };
         }
