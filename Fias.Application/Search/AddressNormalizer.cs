@@ -108,29 +108,40 @@ public sealed partial class AddressNormalizer
     /// Альтернативные разборы для recall-фолбэка — когда основной дал пусто. От специфичного к общему;
     /// <see cref="Services.AddressSearchService"/> пробует их по очереди до первого непустого результата.
     /// </summary>
-    public IEnumerable<(string? Container, string? Street)> AlternativeSplits(ParsedAddressQuery query)
+    public IEnumerable<ParsedAddressQuery> AlternativeSplits(ParsedAddressQuery query)
     {
         var nt = query.NameTokens;
-        if (nt.Count < 2) yield break;
+        if (nt.Count == 0) yield break;
 
-        var head = nt.Take(nt.Count - 1).ToList();
         var last = nt[^1];
+        var head = nt.Take(nt.Count - 1).ToList();
 
         if (StreetMarkers.Contains(last))
         {
-            // Имя улицы = тип-маркер («Челябинск Тупик»): тип-слово отбросили зря. Берём последний
-            // токен как ИМЯ улицы, остальное (без маркеров) — контейнер.
-            var cont = StripMarkers(head);
-            if (cont.Count > 0)
-                yield return (string.Join(' ', cont), last);
+            var cont = NullIfEmpty(string.Join(' ', StripMarkers(head)));
+
+            // 1) Тип-маркер как ИМЯ улицы, дом СОХРАНЯЕМ («Челябинск Тупик»; «город Линия 5» =
+            //    дом 5 на ул. Линия). Пробуем первым — это более частая трактовка.
+            if (cont is not null)
+                yield return query with { RegionOrCity = cont, Street = last };
+
+            // 2) Имя улицы = «<маркер> <число>» («Линия 2», «квартал 4»): число ошибочно ушло в дом.
+            //    Только если дом-сохраняющий вариант не нашёлся → пересобираем имя, дом обнуляем.
+            if (query.House is not null)
+                yield return query with
+                {
+                    RegionOrCity = cont,
+                    Street = $"{last} {query.HouseNum ?? query.House}",
+                    House = null, HouseNum = null, Building = null,
+                };
         }
-        else
+        else if (nt.Count >= 2)
         {
-            // Обратный порядок «улица … город» («Ленина Новосибирск», «12-я Восточная Канашево»):
-            // контейнер — последний токен, улица — остальное.
-            var street = StripMarkers(head);
-            if (street.Count > 0)
-                yield return (last, string.Join(' ', street));
+            // Обратный порядок «улица … город» («Ленина Магнитогорск», «12-я Восточная Канашево»):
+            // контейнер — последний токен, улица — остальное (без маркеров).
+            var street = NullIfEmpty(string.Join(' ', StripMarkers(head)));
+            if (street is not null)
+                yield return query with { RegionOrCity = last, Street = street };
         }
     }
 

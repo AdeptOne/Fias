@@ -50,10 +50,9 @@ public class AddressSearchService(
         var hits = await searchRepository.SearchAsync(parsed, ct);
         if (hits.Count > 0) return hits;
 
-        foreach (var (container, street) in normalizer.AlternativeSplits(parsed))
+        foreach (var alt0 in normalizer.AlternativeSplits(parsed))
         {
-            var alt = parsed with { RegionOrCity = container, Street = street };
-            alt = alt with { SimilarityThreshold = AdaptiveThreshold(alt) };
+            var alt = alt0 with { Limit = parsed.Limit, SimilarityThreshold = AdaptiveThreshold(alt0) };
             var altHits = await searchRepository.SearchAsync(alt, ct);
             if (altHits.Count > 0) return altHits;
         }
