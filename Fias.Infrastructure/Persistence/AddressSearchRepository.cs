@@ -160,8 +160,8 @@ public sealed class AddressSearchRepository(NpgsqlDataSource dataSource) : IAddr
             ),
             ranked AS (
                 SELECT *,
-                       row_number() OVER (ORDER BY fts_rank DESC, object_id) AS r_fts,
-                       row_number() OVER (ORDER BY trgm_sim DESC, object_id) AS r_trgm
+                       rank() OVER (ORDER BY fts_rank DESC) AS r_fts,
+                       rank() OVER (ORDER BY trgm_sim DESC) AS r_trgm
                 FROM cand
             )
             SELECT object_id   AS "ObjectId",
@@ -187,7 +187,9 @@ public sealed class AddressSearchRepository(NpgsqlDataSource dataSource) : IAddr
                    trgm_sim    AS "TrgmSimilarity",
                    ({RrfScoreExpr})::float8 AS "Score"
             FROM ranked
-            ORDER BY "Score" DESC
+            -- Популярность (house_count) — только тай-брейк при равном RRF: разруливает дубли
+            -- одноимённых улиц (берём «живую» с домами), но НИКОГДА не перебивает лучшее совпадение.
+            ORDER BY "Score" DESC, house_count DESC NULLS LAST
             LIMIT @limit
             """;
 
@@ -271,7 +273,7 @@ public sealed class AddressSearchRepository(NpgsqlDataSource dataSource) : IAddr
         var sql = $"""
             WITH q AS (SELECT plainto_tsquery('russian', @term) AS tsq),
             cand AS (
-                SELECT a.object_id, a.object_guid, a.path, a.level,
+                SELECT a.object_id, a.object_guid, a.path, a.level, a.house_count,
                        ts_rank(a.name_tsv, q.tsq) AS fts_rank,
                        similarity(a.name, @term)  AS trgm_sim,
                        (a.name_tsv @@ q.tsq)      AS fts_match,
@@ -283,13 +285,13 @@ public sealed class AddressSearchRepository(NpgsqlDataSource dataSource) : IAddr
             ),
             ranked AS (
                 SELECT *,
-                       row_number() OVER (ORDER BY fts_rank DESC, object_id) AS r_fts,
-                       row_number() OVER (ORDER BY trgm_sim DESC, object_id) AS r_trgm
+                       rank() OVER (ORDER BY fts_rank DESC) AS r_fts,
+                       rank() OVER (ORDER BY trgm_sim DESC) AS r_trgm
                 FROM cand
             )
             SELECT object_id AS "ObjectId", object_guid AS "ObjectGuid", path AS "Path"
             FROM ranked
-            ORDER BY {RrfScoreExpr} DESC
+            ORDER BY {RrfScoreExpr} DESC, house_count DESC NULLS LAST
             LIMIT 1
             """;
 

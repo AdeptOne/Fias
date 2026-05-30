@@ -75,6 +75,21 @@ public sealed class SearchPipelineTests(PostgresFixture fixture)
     }
 
     [Fact]
+    public async Task Duplicate_Street_Name_Ranks_Populous_First()
+    {
+        await BuildPipelineAsync();
+        var repo = new AddressSearchRepository(NpgsqlDataSource.Create(fixture.ConnectionString));
+
+        // Два «Ленина» в одном городе: у объекта 3 есть дом, у 5 — нет. При равном RRF
+        // тай-брейк по house_count должен поставить «живую» улицу (3) первой.
+        var hits = await repo.SearchAsync(
+            Query("новосибирск ленина", regionOrCity: "новосибирск", street: "ленина"), default);
+
+        var streets = hits.Where(h => h.ObjectId is 3 or 5).ToList();
+        Assert.Equal(3, streets[0].ObjectId);
+    }
+
+    [Fact]
     public async Task GetByGuid_Returns_Object_With_Denormalized_Data()
     {
         await BuildPipelineAsync();
@@ -103,23 +118,25 @@ public sealed class SearchPipelineTests(PostgresFixture fixture)
             SimilarityThreshold = 0.3,
         };
 
-    // Минимальный граф: регион(1) → город(2) → улица(3) → дом(4).
+    // Граф: регион(1) → город(2) → улица «Ленина»(3, есть дом) и дубль «Ленина»(5, без домов) → дом(4).
     private const string Seed = """
         INSERT INTO fias.reestr_objects (objectid, levelid, isactive) VALUES
-            (1, 1, true), (2, 5, true), (3, 8, true), (4, 10, true);
+            (1, 1, true), (2, 5, true), (3, 8, true), (4, 10, true), (5, 8, true);
 
         -- updatedate заполнен намеренно: воспроизводит чтение date-колонки билдером
         -- (Npgsql отдаёт date как DateTime → нужен DateOnly TypeHandler).
         INSERT INTO fias.addressobjects (id, objectid, objectguid, name, typename, level, updatedate, isactual, isactive) VALUES
             (1, 1, NULL,         'Новосибирская', 'обл', 1, DATE '2026-05-22', true, true),
             (2, 2, NULL,         'Новосибирск',   'г',   5, DATE '2026-05-22', true, true),
-            (3, 3, @streetGuid,  'Ленина',        'ул',  8, DATE '2026-05-22', true, true);
+            (3, 3, @streetGuid,  'Ленина',        'ул',  8, DATE '2026-05-22', true, true),
+            (5, 5, NULL,         'Ленина',        'ул',  8, DATE '2026-05-22', true, true);
 
         INSERT INTO fias.adm_hierarchy (id, objectid, parentobjid, path, isactive) VALUES
-            (1, 1, NULL, '1',     true),
-            (2, 2, 1,    '1.2',   true),
-            (3, 3, 2,    '1.2.3', true),
-            (4, 4, 3,    '1.2.3.4', true);
+            (1, 1, NULL, '1',       true),
+            (2, 2, 1,    '1.2',     true),
+            (3, 3, 2,    '1.2.3',   true),
+            (4, 4, 3,    '1.2.3.4', true),
+            (5, 5, 2,    '1.2.5',   true);
 
         INSERT INTO fias.houses (id, objectid, housenum, isactual, isactive) VALUES
             (4, 4, '12', true, true);
