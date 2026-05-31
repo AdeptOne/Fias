@@ -26,10 +26,9 @@ public sealed partial class AddressNormalizer
             ["спб"] = "санкт-петербург",
             ["мск"] = "москва",
             ["екб"] = "екатеринбург",
+            ["члб"] = "челябинск",
             ["нн"] = "нижний новгород",
             ["ннов"] = "нижний новгород",
-            // Типовые сокращения (для FTS не критичны — типы всё равно отбрасываются,
-            // но раскрытие делает Normalized человекочитаемым).
             ["ул"] = "улица",
             ["пр-т"] = "проспект",
             ["просп"] = "проспект",
@@ -43,12 +42,32 @@ public sealed partial class AddressNormalizer
         "аллея", "линия", "микрорайон", "мкр", "квартал", "кв-л", "тракт", "кольцо",
     }.ToFrozenSet(StringComparer.Ordinal);
 
+    /// <summary>Маркеры-омонимы: одновременно тип улицы И распространённое СОБСТВЕННОЕ имя улицы
+    /// (в данных ГАР по Челябинску «Набережная» — 321 улица, «Тупик» — отдельная улица). Когда
+    /// такой токен стоит последним в именной части, это имя улицы, а не тип, — выкидывать нельзя,
+    /// иначе теряется единственное имя и поиск находит сам НП («Вавиловец Набережная» → п. Вавиловец).</summary>
+    private static readonly FrozenSet<string> NameLikeMarkers = new[]
+    {
+        "набережная", "тупик",
+    }.ToFrozenSet(StringComparer.Ordinal);
+
+    /// <summary>Перечислимые маркеры: имя такой улицы несёт НОМЕР («квартал 4», «кв-л 157»), и
+    /// отрезанный хвостовой номер — часть имени, а не дом. «линия» сюда НЕ входит: «5-я линия 12» —
+    /// это улица «5-я линия» + дом 12, номер реальный.</summary>
+    private static readonly FrozenSet<string> EnumerableMarkers = new[]
+    {
+        "квартал", "кв-л",
+    }.ToFrozenSet(StringComparer.Ordinal);
+
     /// <summary>Маркеры регионов/населённых пунктов — отбрасываются, но сигналят «это контейнер».</summary>
     private static readonly FrozenSet<string> RegionMarkers = new[]
     {
         "г", "гор", "город", "обл", "область", "край", "респ", "республика", "ао",
         "р-н", "район", "пос", "поселок", "рп", "пгт", "ст", "станица", "село",
         "снт", "тер", "территория", "нп",
+        // Тип-фразы ж/д объектов («Баландино, железнодорожная станция»; «Ванюши, ж/д разъезд»):
+        // это тип НП, а не имя — иначе уходят в улицу и эталон не находится.
+        "станция", "разъезд", "железнодорожная", "железнодорожный", "платформа",
     }.ToFrozenSet(StringComparer.Ordinal);
 
     /// <summary>«Чистые» маркеры дома — слова без номера, выкидываются при нормализации номера.</summary>
@@ -87,6 +106,27 @@ public sealed partial class AddressNormalizer
         var tokens = TokenizeAndExpand(normalized);
 
         var (nameTokens, house) = SplitTrailingHouse(tokens);
+
+        // «квартал 4», «кв-л 157»: перечислимый маркер последним в имени + отрезанный номер —
+        // номер это часть ИМЕНИ улицы (в данных ГАР то «квартал 4», то просто «157» при типе
+        // кв-л), а НЕ дом. Иначе вырожденный парс отдаёт контейнер в Street и слабый trgm-матч на
+        // сам город перебивает recall-фолбэк. Только квартал/кв-л: «линия» опасна («5-я линия 12»).
+        if (house.Num is not null && nameTokens.Count >= 1 && EnumerableMarkers.Contains(nameTokens[^1]))
+        {
+            var contTokens = StripMarkers(nameTokens.GetRange(0, nameTokens.Count - 1));
+            var rebuilt = ($"{nameTokens[^1]} {house.Merged}", string.Join(' ', contTokens));
+            return new ParsedAddressQuery
+            {
+                Raw = raw,
+                Normalized = string.Join(' ', tokens),
+                Tokens = tokens,
+                RegionOrCity = NullIfEmpty(rebuilt.Item2),
+                Street = NullIfEmpty(rebuilt.Item1),
+                NameTokens = nameTokens,
+                House = null, HouseNum = null, Building = null,
+            };
+        }
+
         var (regionOrCity, street) = SplitContainerAndStreet(nameTokens);
 
         return new ParsedAddressQuery
@@ -124,6 +164,13 @@ public sealed partial class AddressNormalizer
             //    дом 5 на ул. Линия). Пробуем первым — это более частая трактовка.
             if (cont is not null)
                 yield return query with { RegionOrCity = cont, Street = last };
+
+            // 1b) Маркер — единственное имя + есть дом, города нет («Набережная 5», «Линия 5»):
+            //     имя улицы = маркер, дом СОХРАНЯЕМ → многогородной поиск дома по одноимённым
+            //     улицам (RegionOrCity несёт имя, Street пуст — та же форма, что «улица+дом»).
+            //     Иначе слово ушло бы в тип и потерялось, а поиск выдал бы список пустых улиц.
+            else if (query.House is not null)
+                yield return query with { RegionOrCity = last, Street = null };
 
             // 2) Имя улицы = «<маркер> <число>» («Линия 2», «квартал 4»): число ошибочно ушло в дом.
             //    Только если дом-сохраняющий вариант не нашёлся → пересобираем имя, дом обнуляем.
@@ -276,6 +323,18 @@ public sealed partial class AddressNormalizer
     private static (string RegionOrCity, string Street) SplitContainerAndStreet(List<string> nameTokens)
     {
         if (nameTokens.Count == 0) return (string.Empty, string.Empty);
+
+        // Маркер-омоним последним токеном — это ИМЯ улицы, а не тип («Вавиловец Набережная» →
+        // город Вавиловец, улица Набережная; «Челябинск Тупик» → улица Тупик). Всё до него (без
+        // маркеров) — контейнер; если контейнера нет — имя уходит в RegionOrCity (форма «имя+дом»
+        // для многогородного поиска, как и одиночная улица).
+        if (NameLikeMarkers.Contains(nameTokens[^1]))
+        {
+            var before = StripMarkers(nameTokens.GetRange(0, nameTokens.Count - 1));
+            return before.Count >= 1
+                ? (string.Join(' ', before), nameTokens[^1])
+                : (nameTokens[^1], string.Empty);
+        }
 
         var streetIdx = nameTokens.FindIndex(t => StreetMarkers.Contains(t));
 

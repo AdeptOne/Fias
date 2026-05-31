@@ -46,17 +46,23 @@ public class AddressSearchService(
     /// </summary>
     private async Task<IReadOnlyList<Search.AddressResult>> SearchWithFallbackAsync(
         ParsedAddressQuery parsed, CancellationToken ct)
+        => (await SearchWithFallbackInfoAsync(parsed, ct)).Hits;
+
+    /// <summary>Как <see cref="SearchWithFallbackAsync"/>, но дополнительно сообщает, был ли результат
+    /// получен альтернативной интерпретацией (сигнал неуверенного разбора для кода качества qc).</summary>
+    private async Task<(IReadOnlyList<Search.AddressResult> Hits, bool UsedFallback)> SearchWithFallbackInfoAsync(
+        ParsedAddressQuery parsed, CancellationToken ct)
     {
         var hits = await searchRepository.SearchAsync(parsed, ct);
-        if (hits.Count > 0) return hits;
+        if (hits.Count > 0) return (hits, false);
 
         foreach (var alt0 in normalizer.AlternativeSplits(parsed))
         {
             var alt = alt0 with { Limit = parsed.Limit, SimilarityThreshold = AdaptiveThreshold(alt0) };
             var altHits = await searchRepository.SearchAsync(alt, ct);
-            if (altHits.Count > 0) return altHits;
+            if (altHits.Count > 0) return (altHits, true);
         }
-        return hits;
+        return (hits, false);
     }
 
     public async Task<IReadOnlyList<AddressSearchResultDto>> SearchAsync(string query, int limit, CancellationToken ct)
@@ -155,19 +161,24 @@ public class AddressSearchService(
     {
         var clean = (query ?? string.Empty).Trim();
         if (clean.Length < 2)
-            return new CleanResultDto(null, null, null, Qc: 3, Confidence: 0);
+        {
+            // Пустой/слишком короткий вход: мусор (qc=2), неполный для рассылки (qc_complete=6).
+            var q = AddressQualityClassifier.Classify(clean, normalizer.Parse(clean), [], usedFallback: false);
+            return new CleanResultDto(null, null, null, q.Qc, q.QcComplete, Confidence: 0);
+        }
 
         var parsed = normalizer.Parse(clean);
-        parsed = parsed with { Limit = 1, SimilarityThreshold = AdaptiveThreshold(parsed) };
-        var hits = await SearchWithFallbackAsync(parsed, ct);
+        // Лимит >1 — чтобы классификатор увидел РАВНОЗНАЧНЫЕ варианты (qc=3, «несколько улиц»).
+        parsed = parsed with { Limit = 5, SimilarityThreshold = AdaptiveThreshold(parsed) };
+        var (hits, usedFallback) = await SearchWithFallbackInfoAsync(parsed, ct);
+
+        var quality = AddressQualityClassifier.Classify(clean, parsed, hits, usedFallback);
         var best = hits.Count > 0 ? hits[0] : null;
         if (best is null)
-            return new CleanResultDto(null, null, null, Qc: 3, Confidence: 0);
+            return new CleanResultDto(null, null, null, quality.Qc, quality.QcComplete, Confidence: 0);
 
-        // qc: 0 — до дома, 1 — до улицы/города, 2 — иначе (нечётко/верхний уровень).
-        var qc = best.Level switch { HouseLevel => 0, >= 5 and <= 8 => 1, _ => 2 };
         var full = FullText(best);
-        return new CleanResultDto(full, full, ToData(best), qc, Math.Clamp(best.Score, 0, 1));
+        return new CleanResultDto(full, full, ToData(best), quality.Qc, quality.QcComplete, Math.Clamp(best.Score, 0, 1));
     }
 
     /// <summary>Резолвит OBJECTID по OBJECTGUID среди всех типов объектов (адрес/дом/квартира/комната).</summary>

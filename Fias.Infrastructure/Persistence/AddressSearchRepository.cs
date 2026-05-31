@@ -44,6 +44,66 @@ public sealed class AddressSearchRepository(NpgsqlDataSource dataSource) : IAddr
           + CASE level WHEN 4 THEN @levelBoost WHEN 5 THEN @levelBoost WHEN 6 THEN @levelBoost * 0.5 ELSE 0 END )
         """;
 
+    // Проекция строки результата из CTE `ranked` (общая для прямого поиска и денорм-фолбэка).
+    // Константная интерполяция RrfScoreExpr допустима — он тоже const.
+    private const string RankedSelect = $"""
+        SELECT object_id   AS "ObjectId",
+               object_guid AS "ObjectGuid",
+               parent_guid AS "ParentGuid",
+               level       AS "Level",
+               name        AS "Name",
+               type_name   AS "TypeName",
+               full_name   AS "FullName",
+               region_code AS "RegionCode",
+               postal_code AS "PostalCode",
+               okato       AS "Okato",
+               oktmo       AS "Oktmo",
+               ifns_ul     AS "IfnsUl",
+               ifns_fl     AS "IfnsFl",
+               kladr_code  AS "KladrCode",
+               region      AS "Region",
+               area        AS "Area",
+               city        AS "City",
+               settlement  AS "Settlement",
+               street      AS "Street",
+               fts_rank    AS "FtsRank",
+               trgm_sim    AS "TrgmSimilarity",
+               ({RrfScoreExpr})::float8 AS "Score"
+        FROM ranked
+        """;
+
+    // Проекция строки дома (голые колонки, без алиаса таблицы) — общая для поиска по поддереву/
+    // улице и для street-aware денорм-фолбэка. Параметры @num/@numLower/@buildingLower/@houseLevel
+    // задаёт вызывающий. Точный номер = 1.0, вариант (литера/корпус) = 0.6; совпавший корпус +0.25.
+    private const string HouseProjection = """
+        object_id   AS "ObjectId",
+        object_guid AS "ObjectGuid",
+        parent_guid AS "ParentGuid",
+        @houseLevel AS "Level",
+        house_num   AS "Name",
+        NULL::text  AS "TypeName",
+        full_name   AS "FullName",
+        region_code AS "RegionCode",
+        postal_code AS "PostalCode",
+        okato       AS "Okato",
+        oktmo       AS "Oktmo",
+        ifns_ul     AS "IfnsUl",
+        ifns_fl     AS "IfnsFl",
+        kladr_code  AS "KladrCode",
+        region      AS "Region",
+        area        AS "Area",
+        city        AS "City",
+        settlement  AS "Settlement",
+        street      AS "Street",
+        0::float8   AS "FtsRank",
+        similarity(house_num, @num)::float8 AS "TrgmSimilarity",
+        ( CASE WHEN lower(house_num) = @numLower THEN 1.0 ELSE 0.6 END
+          + CASE WHEN @buildingLower IS NOT NULL
+                      AND (lower(add_num1) = @buildingLower OR lower(add_num2) = @buildingLower)
+                 THEN 0.25 ELSE 0 END
+        )::float8   AS "Score"
+        """;
+
     // FTS-выражение запроса. При наличии инициала («б хмельницкого» → «б:* & хмельницкого»)
     // идём в to_tsquery с префиксным матчем (ловит и «богдан», и квалификатор «большая»),
     // иначе — привычный plainto_tsquery. @tsqExpr = null → поведение идентично прежнему (ноль
@@ -104,15 +164,26 @@ public sealed class AddressSearchRepository(NpgsqlDataSource dataSource) : IAddr
         {
             var num = query.HouseNum ?? query.House!;
 
-            // Особый случай «улица + дом» без города: лучший «контейнер» сам оказался улицей
-            // (level 8). Тогда ищем дом N по ВСЕМ одноимённым улицам — многогородной поиск
-            // («труда 11» → дом 11 на Труда в разных городах), а не в одной случайной.
-            if (query.Street is null && query.RegionOrCity is not null && container is { Level: 8 })
+            // «улица + дом» без явного города («труда 11», «ленина 5»): голое «имя + номер» —
+            // это почти всегда улица + дом. Ищем дом N по ВСЕМ одноимённым улицам (многогородной
+            // поиск, имя улицы фильтруется в самом запросе), крупные города первыми.
+            //
+            // Раньше ветка включалась лишь когда ЛУЧШИЙ резолв имени сам оказывался улицей
+            // (container.Level == 8). Но одноимённый НП глушил её: «Новый» резолвился в п. Новый
+            // (бонус уровня поднимает НП над улицей), ветка пропускалась, и дом искался по
+            // поддереву посёлка — а там SearchHouses без улицы возвращает дом N на ЛЮБОЙ улице
+            // (Пионерская 6 вместо ул. Новый 6). Поэтому гейт по уровню убран: пробуем
+            // многогородной поиск всегда; контейнер-резолв ниже остаётся фолбэком на пустой выдаче
+            // (реально сельский дом прямо под НП, где одноимённой улицы нет).
+            if (query.Street is null && query.RegionOrCity is not null)
             {
                 var multi = await SearchHousesAcrossStreetsAsync(
                     conn, tx, query.RegionOrCity, num, query.Building, regionCode, baseScope, query.Limit, ct);
-                await tx.CommitAsync(ct);
-                return multi;
+                if (multi.Count > 0)
+                {
+                    await tx.CommitAsync(ct);
+                    return multi;
+                }
             }
 
             long? streetId = null;
@@ -129,10 +200,42 @@ public sealed class AddressSearchRepository(NpgsqlDataSource dataSource) : IAddr
                 }
             }
 
-            // Нужен хоть какой-то scope — иначе по всей базе домов искать нельзя.
-            if (streetId is not null || housePrefix is not null)
+            // 1) Точная привязка к резолвнутой улице (индекс-сик по parent_object_id) — лучший путь.
+            if (streetId is not null)
             {
-                var houses = await SearchHousesAsync(conn, tx, num, query.Building, streetId, housePrefix, query.Limit, ct);
+                var houses = await SearchHousesAsync(conn, tx, num, query.Building, streetId, null, query.Limit, ct);
+                if (houses.Count > 0)
+                {
+                    await tx.CommitAsync(ct);
+                    return houses;
+                }
+            }
+
+            // 2) Улица названа, но точная привязка не дала дома (гомоним НП увёл сужение в чужое
+            //    поддерево; многословное имя ушло мимо границы разбора). Street-aware денорм-поиск:
+            //    имя улицы + контейнер ПРЯМО по денорм-полям дома (homonym-proof), с перебором
+            //    границы «контейнер|улица» по NameTokens (как фолбэк улиц в фазе 2b).
+            if (query.Street is not null && query.RegionOrCity is not null && query.NameTokens.Count >= 2)
+            {
+                var toks = query.NameTokens;
+                for (var k = 1; k < toks.Count; k++)
+                {
+                    var contName = string.Join(' ', toks.Take(k));
+                    var streetName = string.Join(' ', toks.Skip(k));
+                    var byName = await SearchHousesByContainerStreetAsync(
+                        conn, tx, streetName, contName, num, query.Building, regionCode, query.Limit, ct);
+                    if (byName.Count > 0)
+                    {
+                        await tx.CommitAsync(ct);
+                        return byName;
+                    }
+                }
+            }
+
+            // 3) Последний резерв — слепой поиск дома по поддереву контейнера (улицы нет / денорм пуст).
+            if (housePrefix is not null)
+            {
+                var houses = await SearchHousesAsync(conn, tx, num, query.Building, null, housePrefix, query.Limit, ct);
                 await tx.CommitAsync(ct);
                 return houses;
             }
@@ -147,6 +250,27 @@ public sealed class AddressSearchRepository(NpgsqlDataSource dataSource) : IAddr
         }
 
         var results = await SearchObjectsAsync(conn, tx, streetTerm, levelFrom, levelTo, regionCode, containerPrefix, query.Limit, ct);
+
+        // Recall-фолбэк «контейнер + улица»: сужение по дереву дало ПУСТО (контейнер-резолв
+        // промахнулся — гомоним НП или многословное имя ушло мимо границы разбора). Перебираем
+        // границу «контейнер|улица» по сырым NameTokens и ищем улицу с проверкой контейнера ПРЯМО
+        // по денорм-полю строки (homonym-proof). Только на пустой основной выдаче → 0 регрессий.
+        if (results.Count == 0 && query.RegionOrCity is not null && query.NameTokens.Count >= 2)
+        {
+            var toks = query.NameTokens;
+            // Перебор границы «контейнер|улица» в ОБЕ стороны: прямой порядок (город слева,
+            // «Верхний Уфалей Пугачёва») и обратный (reorder — город справа, «Пугачёва Верхний
+            // Уфалей»). Денорм-контейнер homonym-proof, неверная раскладка просто даёт пусто.
+            for (var k = 1; k < toks.Count && results.Count == 0; k++)
+            {
+                var left = string.Join(' ', toks.Take(k));
+                var right = string.Join(' ', toks.Skip(k));
+                results = await SearchStreetsByContainerAsync(conn, tx, right, left, regionCode, query.Limit, ct);
+                if (results.Count == 0)
+                    results = await SearchStreetsByContainerAsync(conn, tx, left, right, regionCode, query.Limit, ct);
+            }
+        }
+
         await tx.CommitAsync(ct);
         return results;
     }
@@ -185,38 +309,68 @@ public sealed class AddressSearchRepository(NpgsqlDataSource dataSource) : IAddr
                        rank() OVER (ORDER BY trgm_sim DESC) AS r_trgm
                 FROM cand
             )
-            SELECT object_id   AS "ObjectId",
-                   object_guid AS "ObjectGuid",
-                   parent_guid AS "ParentGuid",
-                   level       AS "Level",
-                   name        AS "Name",
-                   type_name   AS "TypeName",
-                   full_name   AS "FullName",
-                   region_code AS "RegionCode",
-                   postal_code AS "PostalCode",
-                   okato       AS "Okato",
-                   oktmo       AS "Oktmo",
-                   ifns_ul     AS "IfnsUl",
-                   ifns_fl     AS "IfnsFl",
-                   kladr_code  AS "KladrCode",
-                   region      AS "Region",
-                   area        AS "Area",
-                   city        AS "City",
-                   settlement  AS "Settlement",
-                   street      AS "Street",
-                   fts_rank    AS "FtsRank",
-                   trgm_sim    AS "TrgmSimilarity",
-                   ({RrfScoreExpr})::float8 AS "Score"
-            FROM ranked
+            {RankedSelect}
             -- Популярность (house_count) — только тай-брейк при равном RRF: разруливает дубли
             -- одноимённых улиц (берём «живую» с домами), но НИКОГДА не перебивает лучшее совпадение.
-            ORDER BY "Score" DESC, house_count DESC NULLS LAST
+            ORDER BY "Score" DESC, house_count DESC NULLS LAST, object_id
             LIMIT @limit
             """;
 
         var rows = await conn.QueryAsync<AddressResult>(new CommandDefinition(
             sql,
             new { term, tsqExpr = BuildPrefixTsQuery(term), levelFrom, levelTo, regionCode, pathPrefix, limit, rrfK = RrfK, levelBoost = RrfLevelBoost },
+            transaction: tx, cancellationToken: ct));
+        return rows.AsList();
+    }
+
+    /// <summary>
+    /// Recall-фолбэк «контейнер + улица» (без дома), когда поуровневое сужение дало ПУСТО.
+    /// Сужение ломается, когда контейнер-резолв промахнулся: гомоним НП («Боровое» — 4 села,
+    /// выбрали не то → жёсткий LIKE 'path.%' отсёк эталон) или многословное имя НП ушло мимо
+    /// границы разбора («Верхний Уфалей Пугачёва» → контейнер «верхний», улица «уфалей пугачёва»).
+    ///
+    /// Здесь имя улицы матчится по индексам (name_tsv/trgm), а контейнер проверяется ПРЯМО по
+    /// денормализованным city/settlement/area самой строки улицы — homonym-proof, без сужения по
+    /// дереву. Точную границу «контейнер|улица» вызывающий перебирает (NameTokens), беря первый
+    /// непустой результат.
+    /// </summary>
+    private static async Task<IReadOnlyList<AddressResult>> SearchStreetsByContainerAsync(
+        NpgsqlConnection conn, IDbTransaction tx,
+        string street, string container, int? regionCode, int limit, CancellationToken ct)
+    {
+        var filter = regionCode is not null ? "  AND region_code = @regionCode" : string.Empty;
+        var sql = $"""
+            WITH q AS (SELECT {TsQueryExpr} AS tsq),
+            cand AS (
+                SELECT a.*,
+                       ts_rank(a.name_tsv, q.tsq)::float8 AS fts_rank,
+                       similarity(a.name, @term)::float8  AS trgm_sim,
+                       (a.name_tsv @@ q.tsq)      AS fts_match,
+                       (a.name % @term)           AS trgm_match
+                FROM search.address_objects a
+                CROSS JOIN q
+                WHERE a.level = 8
+                  AND (a.name_tsv @@ q.tsq OR a.name % @term)
+                  -- Контейнер — по родному денорм-полю улицы (точное равенство имени НП/района).
+                  AND ( lower(btrim(a.city))       = @container
+                     OR lower(btrim(a.settlement)) = @container
+                     OR lower(btrim(a.area))       = @container )
+            {filter}
+            ),
+            ranked AS (
+                SELECT *,
+                       rank() OVER (ORDER BY fts_rank DESC) AS r_fts,
+                       rank() OVER (ORDER BY trgm_sim DESC) AS r_trgm
+                FROM cand
+            )
+            {RankedSelect}
+            ORDER BY "Score" DESC, house_count DESC NULLS LAST, object_id
+            LIMIT @limit
+            """;
+
+        var rows = await conn.QueryAsync<AddressResult>(new CommandDefinition(
+            sql,
+            new { term = street, tsqExpr = BuildPrefixTsQuery(street), container, regionCode, limit, rrfK = RrfK, levelBoost = RrfLevelBoost },
             transaction: tx, cancellationToken: ct));
         return rows.AsList();
     }
@@ -230,41 +384,14 @@ public sealed class AddressSearchRepository(NpgsqlDataSource dataSource) : IAddr
         NpgsqlConnection conn, IDbTransaction tx,
         string num, string? building, long? parentObjectId, string? pathPrefix, int limit, CancellationToken ct)
     {
-        const string sql = """
-            SELECT object_id                                   AS "ObjectId",
-                   object_guid                                 AS "ObjectGuid",
-                   parent_guid                                 AS "ParentGuid",
-                   @houseLevel                                 AS "Level",
-                   house_num                                   AS "Name",
-                   NULL::text                                  AS "TypeName",
-                   full_name                                   AS "FullName",
-                   region_code                                 AS "RegionCode",
-                   postal_code                                 AS "PostalCode",
-                   okato                                       AS "Okato",
-                   oktmo                                       AS "Oktmo",
-                   ifns_ul                                     AS "IfnsUl",
-                   ifns_fl                                     AS "IfnsFl",
-                   kladr_code                                  AS "KladrCode",
-                   region                                      AS "Region",
-                   area                                        AS "Area",
-                   city                                        AS "City",
-                   settlement                                  AS "Settlement",
-                   street                                      AS "Street",
-                   0::float8                                   AS "FtsRank",
-                   similarity(house_num, @num)::float8         AS "TrgmSimilarity",
-                   ( CASE WHEN lower(house_num) = @numLower THEN 1.0 ELSE 0.6 END
-                     + CASE WHEN @buildingLower IS NOT NULL
-                                 AND (lower(add_num1) = @buildingLower OR lower(add_num2) = @buildingLower)
-                            THEN 0.25 ELSE 0 END
-                   )::float8                                   AS "Score"
+        var sql = $"""
+            SELECT {HouseProjection}
             FROM search.houses
             WHERE house_num IS NOT NULL
               AND (@parentObjectId::bigint IS NULL OR parent_object_id = @parentObjectId)
               AND (@pathPrefix IS NULL OR path LIKE @pathPrefix)
-              -- Точный номер ИЛИ вариант с литерой/корпусом («11»→«11а»,«11к1»), но НЕ другой
-              -- номер («111»,«110»): триграммный % на числах тянул соседей как мнимые опечатки.
               AND (lower(house_num) = @numLower OR house_num ~* @numVariant)
-            ORDER BY "Score" DESC, house_num
+            ORDER BY "Score" DESC, house_num, object_id
             LIMIT @limit
             """;
 
@@ -278,6 +405,50 @@ public sealed class AddressSearchRepository(NpgsqlDataSource dataSource) : IAddr
                 buildingLower = building?.ToLowerInvariant(),
                 parentObjectId,
                 pathPrefix,
+                houseLevel = HouseLevel,
+                limit,
+            },
+            transaction: tx, cancellationToken: ct));
+        return rows.AsList();
+    }
+
+    /// <summary>
+    /// Street-aware денорм-фолбэк для «контейнер + улица + дом», когда точная привязка к улице не
+    /// дала дома: гомоним НП увёл сужение в чужое поддерево, и слепой поиск по поддереву вернул бы
+    /// дом N на ЛЮБОЙ улице (Березовка «Мичурина 9» → ул. Центральная д9). Здесь дом матчится по
+    /// номеру (индекс house_num) и ПРЯМО по денорм-полям самого дома: точное имя улицы + контейнер
+    /// (city/settlement/area) — homonym-proof, без сужения по дереву.
+    /// </summary>
+    private static async Task<IReadOnlyList<AddressResult>> SearchHousesByContainerStreetAsync(
+        NpgsqlConnection conn, IDbTransaction tx,
+        string street, string container, string num, string? building, int? regionCode, int limit, CancellationToken ct)
+    {
+        var filter = regionCode is not null ? "  AND region_code = @regionCode" : string.Empty;
+        var sql = $"""
+            SELECT {HouseProjection}
+            FROM search.houses
+            WHERE house_num IS NOT NULL
+              AND (lower(house_num) = @numLower OR house_num ~* @numVariant)
+              AND lower(btrim(street)) = @street
+              AND ( lower(btrim(city))       = @container
+                 OR lower(btrim(settlement)) = @container
+                 OR lower(btrim(area))       = @container )
+            {filter}
+            ORDER BY "Score" DESC, house_num, object_id
+            LIMIT @limit
+            """;
+
+        var rows = await conn.QueryAsync<AddressResult>(new CommandDefinition(
+            sql,
+            new
+            {
+                num,
+                numLower = num.ToLowerInvariant(),
+                numVariant = $"^{num}(\\D|$)",
+                buildingLower = building?.ToLowerInvariant(),
+                street,
+                container,
+                regionCode,
                 houseLevel = HouseLevel,
                 limit,
             },
@@ -302,7 +473,11 @@ public sealed class AddressSearchRepository(NpgsqlDataSource dataSource) : IAddr
         var sql = $"""
             WITH q AS (SELECT {TsQueryExpr} AS tsq),
             streets AS (
-                SELECT a.object_id, a.house_count
+                SELECT a.object_id, a.house_count,
+                       -- Точное равенство имени улицы термину — лучшая трактовка, чем стеммингом
+                       -- притянутый суперстринг («Береговая» vs «Береговая Ветлужская»,
+                       -- «Комсомольская» vs «Комсомольский»). Поднимаем такие улицы в порядке.
+                       (lower(btrim(a.name)) = lower(@term)) AS exact_name
                 FROM search.address_objects a
                 CROSS JOIN q
                 WHERE a.level = 8
@@ -340,8 +515,9 @@ public sealed class AddressSearchRepository(NpgsqlDataSource dataSource) : IAddr
             JOIN streets s ON s.object_id = h.parent_object_id
             WHERE h.house_num IS NOT NULL
               AND (lower(h.house_num) = @numLower OR h.house_num ~* @numVariant)
-            -- Точный номер выше вариантов; среди равных — крупные улицы (house_count) первыми.
-            ORDER BY "Score" DESC, s.house_count DESC NULLS LAST, h.house_num
+            -- Точный номер выше вариантов; среди равных — точное имя улицы выше суперстрингов,
+            -- затем крупные улицы (house_count) первыми.
+            ORDER BY "Score" DESC, s.exact_name DESC, s.house_count DESC NULLS LAST, h.house_num, h.object_id
             LIMIT @limit
             """;
 
@@ -424,7 +600,7 @@ public sealed class AddressSearchRepository(NpgsqlDataSource dataSource) : IAddr
             )
             SELECT object_id AS "ObjectId", object_guid AS "ObjectGuid", path AS "Path", level AS "Level"
             FROM ranked
-            ORDER BY {RrfScoreExpr} DESC, house_count DESC NULLS LAST
+            ORDER BY {RrfScoreExpr} DESC, house_count DESC NULLS LAST, object_id
             LIMIT 1
             """;
 

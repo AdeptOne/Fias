@@ -77,6 +77,9 @@ if (!string.IsNullOrWhiteSpace(opt.Query))
     var rank = 0;
     foreach (var h in hits)
         Console.WriteLine($"  {++rank,2}. [{h.Similarity:F3}] lvl{h.Level} {h.FullName}  ({h.ObjectGuid})");
+
+    var clean = await adhoc.CleanAsync(opt.Query, ct);
+    Console.WriteLine($"  clean → qc={clean.Qc} qc_complete={clean.QcComplete} conf={clean.Confidence:F3}  «{clean.Value}»");
     return 0;
 }
 

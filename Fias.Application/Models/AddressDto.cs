@@ -101,11 +101,14 @@ public record SuggestionDto(
     [property: JsonPropertyName("unrestricted_value")] string UnrestrictedValue,
     [property: JsonPropertyName("data")] AddressDataDto Data);
 
-/// <summary>Результат стандартизации строки: лучший разбор + код качества и уверенность.</summary>
+/// <summary>Результат стандартизации строки: лучший разбор + коды качества (семантика DaData) и уверенность.</summary>
 public record CleanResultDto(
     [property: JsonPropertyName("value"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Value,
     [property: JsonPropertyName("unrestricted_value"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? UnrestrictedValue,
     [property: JsonPropertyName("data"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] AddressDataDto? Data,
-    // qc: 0 — распознано до дома; 1 — до улицы/города; 2 — нечётко; 3 — не распознано.
+    // qc — нужна ли ручная проверка: 0 уверенно, 1 лишние части/тонкий контекст, 2 пусто/мусор/иностр., 3 альтернативы.
     [property: JsonPropertyName("qc")] int Qc,
+    // qc_complete — пригодность к рассылке: 0 годен, 5 нет кв., 10 дома нет в ФИАС, 8 а/я, 9 проверьте разбор,
+    // 1 нет региона, 2 нет города, 3 нет улицы, 4 нет дома, 6 неполный, 7 иностранный.
+    [property: JsonPropertyName("qc_complete")] int QcComplete,
     [property: JsonPropertyName("confidence")] double Confidence);

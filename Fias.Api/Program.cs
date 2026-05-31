@@ -41,10 +41,10 @@ builder.Services.AddRateLimiter(options =>
         var key = ctx.Request.Headers.TryGetValue(ApiKeyAuthenticationSchemeOptions.HeaderName, out var v)
             ? v.ToString()
             : ctx.Connection.RemoteIpAddress?.ToString() ?? "anon";
-        // 600 запросов/мин с ключом, 60/мин без ключа.
+        // 15000 запросов/мин с ключом, 500/мин без ключа.
         var permits = string.IsNullOrEmpty(key) || key == "anon" || ctx.Connection.RemoteIpAddress is not null && key == ctx.Connection.RemoteIpAddress.ToString()
-            ? 60
-            : 600;
+            ? 500
+            : 15000;
         return RateLimitPartition.GetFixedWindowLimiter(key, _ => new FixedWindowRateLimiterOptions
         {
             PermitLimit = permits,
