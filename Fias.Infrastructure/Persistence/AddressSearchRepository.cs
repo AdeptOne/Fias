@@ -44,6 +44,14 @@ public sealed class AddressSearchRepository(NpgsqlDataSource dataSource) : IAddr
           + CASE level WHEN 4 THEN @levelBoost WHEN 5 THEN @levelBoost WHEN 6 THEN @levelBoost * 0.5 ELSE 0 END )
         """;
 
+    // FTS-выражение запроса. При наличии инициала («б хмельницкого» → «б:* & хмельницкого»)
+    // идём в to_tsquery с префиксным матчем (ловит и «богдан», и квалификатор «большая»),
+    // иначе — привычный plainto_tsquery. @tsqExpr = null → поведение идентично прежнему (ноль
+    // регрессий для запросов без инициалов).
+    private const string TsQueryExpr =
+        "CASE WHEN @tsqExpr::text IS NULL THEN plainto_tsquery('russian', @term) " +
+        "ELSE to_tsquery('russian', @tsqExpr) END";
+
     public async Task<IReadOnlyList<AddressResult>> SearchAsync(ParsedAddressQuery query, CancellationToken ct)
     {
         if (!query.HasContent) return Array.Empty<AddressResult>();
@@ -159,7 +167,7 @@ public sealed class AddressSearchRepository(NpgsqlDataSource dataSource) : IAddr
         // RRF: кандидаты ранжируются отдельно по FTS и по триграммам (оконные row_number),
         // затем складываются обратные ранги. Несравнимые шкалы ts_rank/similarity не смешиваем.
         var sql = $"""
-            WITH q AS (SELECT plainto_tsquery('russian', @term) AS tsq),
+            WITH q AS (SELECT {TsQueryExpr} AS tsq),
             cand AS (
                 SELECT a.*,
                        ts_rank(a.name_tsv, q.tsq)::float8 AS fts_rank,
@@ -208,7 +216,7 @@ public sealed class AddressSearchRepository(NpgsqlDataSource dataSource) : IAddr
 
         var rows = await conn.QueryAsync<AddressResult>(new CommandDefinition(
             sql,
-            new { term, levelFrom, levelTo, regionCode, pathPrefix, limit, rrfK = RrfK, levelBoost = RrfLevelBoost },
+            new { term, tsqExpr = BuildPrefixTsQuery(term), levelFrom, levelTo, regionCode, pathPrefix, limit, rrfK = RrfK, levelBoost = RrfLevelBoost },
             transaction: tx, cancellationToken: ct));
         return rows.AsList();
     }
@@ -292,7 +300,7 @@ public sealed class AddressSearchRepository(NpgsqlDataSource dataSource) : IAddr
         if (pathPrefix is not null) streetFilters.AppendLine("              AND a.path LIKE @pathPrefix");
 
         var sql = $"""
-            WITH q AS (SELECT plainto_tsquery('russian', @term) AS tsq),
+            WITH q AS (SELECT {TsQueryExpr} AS tsq),
             streets AS (
                 SELECT a.object_id, a.house_count
                 FROM search.address_objects a
@@ -342,6 +350,7 @@ public sealed class AddressSearchRepository(NpgsqlDataSource dataSource) : IAddr
             new
             {
                 term,
+                tsqExpr = BuildPrefixTsQuery(term),
                 num,
                 numLower = num.ToLowerInvariant(),
                 numVariant = $"^{num}(\\D|$)",
@@ -355,6 +364,37 @@ public sealed class AddressSearchRepository(NpgsqlDataSource dataSource) : IAddr
         return rows.AsList();
     }
 
+    /// <summary>
+    /// Строит выражение для <c>to_tsquery</c> с префиксным матчем одиночных инициалов:
+    /// «б хмельницкого» → «б:* &amp; хмельницкого». Возвращает null, если инициалов нет — тогда
+    /// SQL остаётся на plainto_tsquery (ноль регрессий). Одиночная кириллическая буква = инициал
+    /// имени («Б.Хмельницкого» → «Богдана Хмельницкого»); префикс ловит и квалификаторы
+    /// («Б. Никитская» → «Большая»). Токены чистим до букв/цифр — вход to_tsquery строго валиден.
+    /// </summary>
+    private static string? BuildPrefixTsQuery(string term)
+    {
+        var parts = new List<string>();
+        var hasInitial = false;
+
+        foreach (var token in term.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var clean = new string(token.Where(char.IsLetterOrDigit).ToArray());
+            if (clean.Length == 0) continue;
+
+            if (clean.Length == 1 && clean[0] is >= 'а' and <= 'я')
+            {
+                parts.Add(clean + ":*");
+                hasInitial = true;
+            }
+            else
+            {
+                parts.Add(clean);
+            }
+        }
+
+        return hasInitial && parts.Count > 0 ? string.Join(" & ", parts) : null;
+    }
+
     private readonly record struct ResolveHit(long ObjectId, Guid? ObjectGuid, string? Path, int? Level);
 
     /// <summary>Лучший объект по термину в заданном поддереве (с его денормализованным path).</summary>
@@ -364,7 +404,7 @@ public sealed class AddressSearchRepository(NpgsqlDataSource dataSource) : IAddr
         // То же RRF-ранжирование, что и в основном поиске, но нужен только топ-1 (с его path).
         var filter = pathPrefix is not null ? "  AND path LIKE @pathPrefix" : string.Empty;
         var sql = $"""
-            WITH q AS (SELECT plainto_tsquery('russian', @term) AS tsq),
+            WITH q AS (SELECT {TsQueryExpr} AS tsq),
             cand AS (
                 SELECT a.object_id, a.object_guid, a.path, a.level, a.house_count,
                        ts_rank(a.name_tsv, q.tsq) AS fts_rank,
@@ -390,7 +430,7 @@ public sealed class AddressSearchRepository(NpgsqlDataSource dataSource) : IAddr
 
         var rows = await conn.QueryAsync<ResolveHit>(new CommandDefinition(
             sql,
-            new { term, pathPrefix, rrfK = RrfK, levelBoost = RrfLevelBoost },
+            new { term, tsqExpr = BuildPrefixTsQuery(term), pathPrefix, rrfK = RrfK, levelBoost = RrfLevelBoost },
             transaction: tx, cancellationToken: ct));
 
         var hit = rows.FirstOrDefault();

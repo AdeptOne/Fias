@@ -294,13 +294,17 @@ public sealed partial class AddressNormalizer
         }
 
         var content = StripMarkers(nameTokens);
-        return content.Count switch
-        {
-            0 => (string.Empty, string.Empty),
-            1 => (content[0], string.Empty),
-            // «новосибирск ленина» → город + улица; «нижний новгород» → весь контейнер, улицы нет.
-            _ => (content[0], string.Join(' ', content.GetRange(1, content.Count - 1))),
-        };
+        if (content.Count == 0) return (string.Empty, string.Empty);
+        if (content.Count == 1) return (content[0], string.Empty);
+
+        // Первый токен — одиночная буква: это инициал имени улицы («Б. Хмельницкого»,
+        // «К. Маркса»), а НЕ контейнер. Вся часть уходит в улицу; раскрытие инициала в
+        // полное имя делает префиксный матч FTS в репозитории (б → богдан/большая).
+        if (IsInitial(content[0]))
+            return (string.Empty, string.Join(' ', content));
+
+        // «новосибирск ленина» → город + улица; «нижний новгород» → весь контейнер, улицы нет.
+        return (content[0], string.Join(' ', content.GetRange(1, content.Count - 1)));
     }
 
     private static List<string> StripMarkers(List<string> tokens)
@@ -311,6 +315,9 @@ public sealed partial class AddressNormalizer
                 result.Add(t);
         return result;
     }
+
+    /// <summary>Одиночная кириллическая буква — инициал имени («Б.» в «Б. Хмельницкого»).</summary>
+    private static bool IsInitial(string token) => token.Length == 1 && token[0] is >= 'а' and <= 'я';
 
     private static string? NullIfEmpty(string s) => string.IsNullOrWhiteSpace(s) ? null : s;
 }

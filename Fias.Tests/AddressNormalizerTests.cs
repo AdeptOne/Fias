@@ -40,6 +40,32 @@ public class AddressNormalizerTests
         Assert.Null(r.House);
     }
 
+    // ---------- Инициал имени улицы: «Б.Хмельницкого» → улица, не город ----------
+
+    [Theory]
+    [InlineData("б хмельницкого 2",   "б хмельницкого", "2")]
+    [InlineData("Б.Хмельницкого 2",   "б хмельницкого", "2")] // точка → пробел, регистр
+    [InlineData("к маркса 10",        "к маркса",       "10")]
+    public void Parse_LeadingInitial_StaysInStreet(string query, string street, string houseNum)
+    {
+        var r = _sut.Parse(query);
+
+        // Одиночная буква — инициал имени, а НЕ контейнер: город не вычленяется.
+        Assert.Null(r.RegionOrCity);
+        Assert.Equal(street, r.Street);
+        Assert.Equal(houseNum, r.HouseNum);
+    }
+
+    [Fact]
+    public void Parse_InitialWithCity_KeepsCityAndStreet()
+    {
+        var r = _sut.Parse("москва б хмельницкого 2");
+
+        Assert.Equal("москва", r.RegionOrCity);
+        Assert.Equal("б хмельницкого", r.Street);
+        Assert.Equal("2", r.HouseNum);
+    }
+
     // ---------- Разбор номера дома: база + корпус/строение ----------
 
     [Theory]
